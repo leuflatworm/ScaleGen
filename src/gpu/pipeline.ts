@@ -22,6 +22,7 @@ export interface ShadeParams {
   colorMode: 0 | 1 | 2;
   tint: [number, number, number];
   gap: [number, number, number];
+  gapClear: boolean;                    // 隙間を透明にする
   tileLum: number;
   briVar: number;
   hueVar: number;
@@ -274,6 +275,7 @@ export class Generator {
     this.draw(this.pass(SHADE_FS, {
       tCol: { value: m.tiled.textures[0] }, tAux: { value: aux }, tCtr: { value: m.tiled.textures[2] }, tAO: { value: art.texture },
       uColorMode: { value: sp.colorMode }, uTint: { value: new THREE.Vector3(...sp.tint) }, uGap: { value: new THREE.Vector3(...sp.gap) },
+      uGapClear: { value: sp.gapClear ? 1 : 0 },
       uTileLum: { value: sp.tileLum }, uBriVar: { value: sp.briVar }, uHueVar: { value: sp.hueVar },
       uFleck: { value: sp.fleck }, uGroove: { value: sp.groove }, uAO: { value: sp.ao },
       uNoiseFreq: { value: 1 / (m.spacing * 12) },

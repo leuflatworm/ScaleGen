@@ -151,7 +151,7 @@ export class Viewer {
     if (this.flowLines) this.flowLines.visible = v;
   }
 
-  setPreview(matIndex: number, color: Uint8Array, normal: Uint8Array, res: number): void {
+  setPreview(matIndex: number, color: Uint8Array, normal: Uint8Array, res: number, clear = false): void {
     const m = this.mats[matIndex];
     if (!m) return;
     m.map?.dispose();
@@ -170,6 +170,8 @@ export class Viewer {
     m.normalMap = mk(normal, THREE.NoColorSpace);
     m.color.set(0xffffff);
     m.roughness = 0.55;
+    // 隙間を透明にしたときは、被覆が半分未満の所を抜いて表示する
+    m.alphaTest = clear ? 0.5 : 0;
     m.needsUpdate = true;
   }
 
@@ -177,6 +179,7 @@ export class Viewer {
     for (const m of this.mats) {
       m.map?.dispose(); m.normalMap?.dispose();
       m.map = null; m.normalMap = null;
+      m.alphaTest = 0;
       m.color.set(0x9a9a9a);
       m.needsUpdate = true;
     }

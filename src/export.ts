@@ -18,6 +18,11 @@ export async function png8(rgba: Uint8Array, w: number, h: number): Promise<Uint
   return new Uint8Array(await blob.arrayBuffer());
 }
 
+// 透明を含む RGBA をそのまま PNG にする(canvas を通すと乗算済みアルファの往復で薄い所の色が崩れるため)
+export function png8Exact(rgba: Uint8Array, w: number, h: number): Uint8Array {
+  return encode({ width: w, height: h, data: flipRowsRGBA8(rgba, w, h), channels: 4, depth: 8 });
+}
+
 // 高さは 16bit グレー(aux の R)
 export function pngHeight16(aux: Float32Array, w: number, h: number): Uint8Array {
   const d = new Uint16Array(w * h);

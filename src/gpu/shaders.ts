@@ -325,6 +325,7 @@ uniform int uHasSrc;
 uniform float uRes;
 uniform vec3 uTint;
 uniform vec3 uGap;            // 鱗の隙間の色
+uniform int uGapClear;        // 1 = 隙間を透明にする(a = 鱗の被覆)
 uniform float uTileLum;       // タイルの平均明度
 uniform float uBriVar;        // 鱗ごとの明るさの差
 uniform float uHueVar;        // 鱗ごとの色味の差
@@ -395,6 +396,11 @@ void main() {
   float groove = 1.0 - smoothstep(0.33, 0.72, aux.x);
   base *= 1.0 - groove * uGroove * 0.75 * mask;
   base *= mix(1.0, texelFetch(tAO, p, 0).x, 0.6 * uAO);
+  if (uGapClear == 1) {
+    // 透明にするときは a = 被覆。半透明の縁は鱗の色のまま a だけ下げる(隙間の色を混ぜると縁が黒ずむ)
+    o = vec4(clamp(mask > 1e-3 ? base : gap, 0.0, 1.0), mask);
+    return;
+  }
   vec3 c = base * mask + gap * (1.0 - mask);
   o = vec4(clamp(c, 0.0, 1.0), 1.0);
 }

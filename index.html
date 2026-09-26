@@ -33,6 +33,13 @@
         </select>
       </div>
       <div id="matList" class="matlist"></div>
+      <details id="maskBox">
+        <summary>鱗を貼らない範囲(マスク)</summary>
+        <p class="hint">モデルと同じ UV の白黒画像を読み込みます。白 = 鱗を貼る、黒・透明 = 貼らない。<br />
+          鱗は「中心が白い所にあるもの」だけが残るので、境界でも 1 枚ずつの形は切れません。</p>
+        <div id="maskList" class="srclist"></div>
+        <label class="check"><input id="maskInvert" type="checkbox" /> 白黒を反転する(白 = 貼らない)</label>
+      </details>
     </section>
 
     <section>
@@ -94,7 +101,13 @@
         <div id="srcTexList" class="srclist"></div>
       </div>
       <div class="row" id="tintRow"><label for="tint">鱗の色</label><input id="tint" type="color" value="#6b7a3a" /></div>
-      <div class="row" id="gapRow"><label for="gap">隙間の色</label><input id="gap" type="color" value="#1a1a12" /></div>
+      <div class="row" id="gapRow">
+        <label for="gap" id="gapLabel">隙間の色</label>
+        <span class="inline">
+          <label class="check" title="鱗の無い所を透明にします(BaseColor の透明度 = 鱗の被覆)"><input id="gapClear" type="checkbox" /> 透過</label>
+          <input id="gap" type="color" value="#1a1a12" />
+        </span>
+      </div>
       <div id="bellyBox">
         <label class="check"><input id="belly" type="checkbox" /> お腹側の色を変える</label>
         <div id="bellyOpts" hidden>

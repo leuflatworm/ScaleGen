@@ -102,3 +102,7 @@ details summary { cursor: pointer; color: var(--muted); margin: 6px 0; }
 .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
 button.small { font-size: 11px; padding: 3px 7px; flex: none; margin-top: 2px; }
 #tileSaveNote[hidden] { display: none; }
+.inline { display: flex; align-items: center; gap: 8px; }
+.inline .check { margin: 0; }
+input[type=color]:disabled { opacity: 0.35; }
+.srclist .src .tools { display: flex; gap: 4px; }

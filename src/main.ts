@@ -10,9 +10,10 @@ import type { Progress } from './core/scatter';
 import { TILE_PRESETS, loadTileFile, makePresetTile, tileSize, type TileImage } from './core/tiles';
 import { Generator, type TileParams, type MaterialResult, type ShadeOutput, type ShadeParams } from './gpu/pipeline';
 import { Viewer } from './viewer';
-import { downloadZip, flipRowsRGBA8, png8, pngHeight16 } from './export';
+import { downloadZip, flipRowsRGBA8, png8, png8Exact, pngHeight16 } from './export';
 import { placementStats, verify, verifyScaleColors } from './verify';
 import { loadSourceImage, scaleColorsFromSources, type SourceImage } from './core/colorsource';
+import { applyMask } from './core/maskfilter';
 import { checkSupport } from './support';
 import { attachNumberFields, sliderValue } from './numfield';
 import {
@@ -37,7 +38,9 @@ if (unsupported) {
   throw new Error(unsupported);
 }
 
-$('appVersion').textContent = `v${__APP_VERSION__}`;
+// 版表示: package.json の version + ビルドしたコミット。版を上げ忘れてもコミットで区別できる
+$('appVersion').textContent = `v${__APP_VERSION__}` + (__BUILD_SHA__ ? ` (${__BUILD_SHA__})` : '') + (import.meta.env.DEV ? ' dev' : '');
+$('appVersion').title = `ビルド日 ${__BUILD_DATE__}`;
 
 const viewer = new Viewer($('view'));
 const gen = new Generator(viewer.renderer);
@@ -60,6 +63,8 @@ const state = {
   shaded: new Map<number, ShadeOutput>(),
   timings: {} as Record<string, number>,
   sources: new Map<number, SourceImage>(),          // マテリアルごとの元の色テクスチャ
+  masks: new Map<number, SourceImage>(),            // マテリアルごとの「鱗を貼らない範囲」のマスク
+  maskRemoved: 0,                                    // マスクで取り除いた鱗の数
   sourceTex: new Map<number, THREE.Texture>(),
 };
 
@@ -98,6 +103,7 @@ function rebuildSurface(): void {
   state.surface = s;
   state.matMask = s.materials.map(() => true);
   state.sources.clear();
+  state.masks.clear();
   state.sourceTex.forEach((t) => t.dispose());
   state.sourceTex.clear();
   clearResults();
@@ -118,12 +124,14 @@ function rebuildSurface(): void {
       updateFlow();
       updateCount();
       renderSourceList();
+      renderMaskList();
     });
     list.appendChild(l);
   });
   updateFlow();
   updateCount();
   renderSourceList();
+  renderMaskList();
 }
 
 $('modelFile').addEventListener('change', async (e) => {
@@ -267,6 +275,7 @@ function shadeParams(): ShadeParams {
     colorMode: colorMode(),
     tint: hex2rgb($<HTMLInputElement>('tint').value),
     gap: hex2rgb($<HTMLInputElement>('gap').value),
+    gapClear: $<HTMLInputElement>('gapClear').checked,
     tileLum: 0.2126 * mc[0] + 0.7152 * mc[1] + 0.0722 * mc[2],
     briVar: num('briVar'), hueVar: num('hueVar'), fleck: num('fleck'), groove: num('groove'),
     ao: 1, normalStrength: num('normalStrength'),
@@ -284,13 +293,13 @@ function reshade(): void {
     for (const [mi, r] of state.results) {
       const o = gen.shade(r, shadeParams(), state.sourceTex.get(mi) ?? null);
       state.shaded.set(mi, o);
-      viewer.setPreview(mi, o.color, o.normal, r.res);
+      viewer.setPreview(mi, o.color, o.normal, r.res, $<HTMLInputElement>('gapClear').checked);
     }
     state.timings.shadeMs = performance.now() - t0;
     draw2d();
   }, 120);
 }
-['colorMode', 'tint', 'gap', 'briVar', 'hueVar', 'fleck', 'groove', 'normalStrength', 'belly', 'bellyColor', 'bellyDir', 'bellyRange']
+['colorMode', 'tint', 'gap', 'gapClear', 'briVar', 'hueVar', 'fleck', 'groove', 'normalStrength', 'belly', 'bellyColor', 'bellyDir', 'bellyRange']
   .forEach((id) => $(id).addEventListener('input', reshade));
 $('belly').addEventListener('input', () => { $('bellyOpts').hidden = !$<HTMLInputElement>('belly').checked; });
 
@@ -298,12 +307,16 @@ $('belly').addEventListener('input', () => { $('bellyOpts').hidden = !$<HTMLInpu
 function updateColorModeUI(): void {
   const m = colorMode();
   $('srcTexBox').hidden = m !== 2;
-  $('gapRow').hidden = m === 2;
+  // 隙間: テクスチャから取るときは色の指定は使わない(その場所の元の色を暗くする)。透過はどのモードでも選べる
+  const clear = $<HTMLInputElement>('gapClear').checked;
+  $<HTMLInputElement>('gap').disabled = m === 2 || clear;
+  $('gapLabel').textContent = clear ? '隙間(透明)' : m === 2 ? '隙間(元の色を暗く)' : '隙間の色';
   $('tintRow').querySelector('label')!.textContent = m === 2 ? '鱗の色(テクスチャが無い所)' : '鱗の色';
   $('tintRow').hidden = m === 0;
   $('bellyBox').hidden = m === 2;   // テクスチャから色を取るときは元の色に任せる
 }
 $('colorMode').addEventListener('input', updateColorModeUI);
+$('gapClear').addEventListener('input', updateColorModeUI);
 updateColorModeUI();
 
 function renderSourceList(): void {
@@ -348,6 +361,55 @@ async function setSource(mi: number, file: File): Promise<void> {
   applyScaleColors();
   reshade();
 }
+
+// --- 鱗を貼らない範囲(マスク) ---
+function renderMaskList(): void {
+  const list = $('maskList');
+  list.innerHTML = '';
+  const s = state.surface;
+  if (!s) { list.innerHTML = '<div class="hint">先にモデルを読み込んでください</div>'; return; }
+  s.materials.forEach((name, mi) => {
+    if (!state.matMask[mi]) return;
+    const m = state.masks.get(mi);
+    const row = document.createElement('div');
+    row.className = 'src';
+    const thumb = document.createElement('canvas');
+    thumb.width = thumb.height = 40;
+    if (m) thumb.getContext('2d')!.drawImage(m.canvas, 0, 0, 40, 40);
+    const label = document.createElement('div');
+    label.className = 'name';
+    label.innerHTML = `${escapeHtml(name)}<small>${m ? escapeHtml(m.name) : 'なし(全体に貼る)'}</small>`;
+    const tools = document.createElement('div');
+    tools.className = 'tools';
+    const pick = document.createElement('label');
+    pick.className = 'file';
+    pick.innerHTML = '画像を選ぶ<input type="file" accept="image/png,image/jpeg,image/webp">';
+    pick.querySelector('input')!.addEventListener('change', async (e) => {
+      const f = (e.target as HTMLInputElement).files?.[0];
+      if (f) await setMask(mi, f);
+    });
+    tools.appendChild(pick);
+    if (m) {
+      const clear = document.createElement('button');
+      clear.textContent = '外す';
+      clear.addEventListener('click', () => setMask(mi, null));
+      tools.appendChild(clear);
+    }
+    row.append(thumb, label, tools);
+    list.appendChild(row);
+  });
+}
+
+// マスクは鱗の配置が決まったあとで効くので、生成済みなら作り直す(配置は同じ乱数で同じ結果になる)
+async function setMask(mi: number, file: File | null): Promise<void> {
+  if (file) state.masks.set(mi, await loadSourceImage(file));
+  else state.masks.delete(mi);
+  renderMaskList();
+  if (state.results.size > 0) generate();
+}
+$('maskInvert').addEventListener('change', () => {
+  if (state.masks.size > 0 && state.results.size > 0) generate();
+});
 
 // 生成済みの鱗に、中心の位置の色を割り当てる(敷き詰めのやり直しは不要)
 function applyScaleColors(): void {
@@ -482,10 +544,16 @@ async function generate(): Promise<void> {
       setProgress(placeFrac * (st.from + (to - st.from) * f), `${st.label}…`);
     });
     if (ac.signal.aborted) throw abortError();
-    state.scales = sc.scales;
-    state.forbid = sc.forbid;
+    // 配置が確定してから、中心がマスクの外にある鱗を取り除く(残った鱗は境界をまたいでも形を保つ)
+    const masked = applyMask(sc.scales, sc.forbid, state.masks, $<HTMLInputElement>('maskInvert').checked);
+    if (masked.scales.count === 0) {
+      throw new Error('マスクで鱗がすべて取り除かれました。マスクの白黒(反転)を確かめてください');
+    }
+    state.scales = masked.scales;
+    state.forbid = masked.forbid;
+    state.maskRemoved = masked.removed;
     state.timings = { scatterMs: sc.ms, separationMs: sc.sepMs };
-    gen.setScales(sc.scales, tp, sc.forbid);
+    gen.setScales(masked.scales, tp, masked.forbid);
     applyScaleColors();
     let k = 0;
     for (const mi of mats) {
@@ -504,13 +572,15 @@ async function generate(): Promise<void> {
       if (ac.signal.aborted) throw abortError();
       const o = gen.shade(r, shadeParams(), state.sourceTex.get(mi) ?? null);
       state.shaded.set(mi, o);
-      viewer.setPreview(mi, o.color, o.normal, res);
+      viewer.setPreview(mi, o.color, o.normal, res, $<HTMLInputElement>('gapClear').checked);
       k++;
     }
     setProgress(1, '完了');
     state.timings.totalMs = performance.now() - tAll;
     setStatus(
-      `完了: 鱗 ${sc.scales.count.toLocaleString()} 枚 / ${res}px / ${mats.length} マテリアル\n` +
+      `完了: 鱗 ${state.scales.count.toLocaleString()} 枚` +
+      (state.maskRemoved > 0 ? `(マスクで ${state.maskRemoved.toLocaleString()} 枚を除去)` : '') +
+      ` / ${res}px / ${mats.length} マテリアル\n` +
       `配置 ${(sc.ms / 1000).toFixed(2)} 秒` +
       (separate ? `・部位の判定 ${(sc.sepMs / 1000).toFixed(2)} 秒` : '') +
       `・合計 ${(state.timings.totalMs / 1000).toFixed(2)} 秒`,
@@ -551,7 +621,10 @@ async function buildExport(): Promise<Record<string, Uint8Array>> {
   for (const [mi, r] of state.results) {
     const o = state.shaded.get(mi)!;
     const base = `${safeName(state.modelName)}_${safeName(state.surface.materials[mi])}`;
-    files[`${base}_BaseColor.png`] = await png8(o.color, r.res, r.res);
+    // 隙間を透明にしたときは透明度を正確に残す書き出しにする
+    files[`${base}_BaseColor.png`] = $<HTMLInputElement>('gapClear').checked
+      ? png8Exact(o.color, r.res, r.res)
+      : await png8(o.color, r.res, r.res);
     files[`${base}_Normal.png`] = await png8(o.normal, r.res, r.res);
     files[`${base}_AO.png`] = await png8(o.ao, r.res, r.res);
     files[`${base}_Height.png`] = pngHeight16(gen.readAux(r), r.res, r.res);
@@ -670,6 +743,7 @@ if (import.meta.env.DEV) {
     },
     setCurves(curves: { points: number[] }[]) { viewer.curves = curves; updateFlow(); },
     setSource,
+    setMask,
     verifyColors() {
       return [...state.results].filter(([mi]) => state.sources.has(mi)).map(([mi, r]) =>
         verifyScaleColors(state.scales!, state.sources.get(mi)!, mi, state.shaded.get(mi)!.color, gen.readAux(r), gen.readPos(r), r.res));
