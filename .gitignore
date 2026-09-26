@@ -1,0 +1,6 @@
+node_modules/
+dist/
+# 動作確認用のモデル(ライセンス物のため配布物に含めない)
+samples/
+# このアプリ(Claude Code)用の開発設定
+.claude/

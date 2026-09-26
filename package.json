@@ -1,0 +1,30 @@
+{
+  "name": "scalegen",
+  "private": true,
+  "version": "0.1.0",
+  "description": "FBX モデルに合わせて継ぎ目の無い鱗テクスチャを作るブラウザツール",
+  "license": "MIT",
+  "author": "Leu",
+  "homepage": "https://leuflatworm.github.io/ScaleGen/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/leuflatworm/ScaleGen.git"
+  },
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "fast-png": "^8.0.0",
+    "fflate": "^0.8.3",
+    "three": "^0.186.1",
+    "three-mesh-bvh": "^0.9.15"
+  },
+  "devDependencies": {
+    "@types/three": "^0.186.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.1"
+  }
+}

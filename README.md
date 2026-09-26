@@ -1,0 +1,64 @@
+# ScaleGen — 鱗テクスチャジェネレーター
+
+FBX モデルに合わせて、UV の継ぎ目で途切れない鱗テクスチャ(BaseColor / Normal / AO / Height)を作るツールです。
+ブラウザだけで動き、インストールは要りません。読み込んだモデルと画像はパソコンの中(ブラウザ)だけで処理され、どこにも送信されません。
+
+**使う: https://leuflatworm.github.io/ScaleGen/**
+
+## 使い方
+
+1. **モデル** — FBX(OBJ・GLB も可)を開き、鱗を付けるマテリアルにチェックを入れる。大きさの表示が実物とずれていたら「単位」を直す
+2. **鱗の形** — 内蔵の形を選ぶか、透過 PNG を読み込む(画像の下 = 付け根、上 = 先端)。凹凸を細かく決めたいときは高さ画像も読み込める
+3. **流れ** — 基本の向きを選ぶ。部分的に変えたいときは「流れを描く」をオンにして、モデルの上を頭 → 尻尾の向きにドラッグ
+4. **大きさ** — 鱗の大きさ(mm)を決める。テクスチャ上で 1 枚が小さすぎると警告が出る
+5. **色** — 色を指定する / モデルの色テクスチャから鱗ごとの色を取る / 鱗の画像の色のまま、から選ぶ。お腹側の色も変えられる
+6. **生成と書き出し** — 「生成」で 3D プレビューに反映。「ZIP で書き出し」で PNG 一式を保存する
+
+書き出したノーマルマップは OpenGL 形式(Unity と同じ +Y)です。
+
+### 動作環境
+
+パソコン版の Chrome・Edge・Firefox の最新版。WebGL2 と浮動小数の描画(EXT_color_buffer_float)を使います。
+動かない場合は、ブラウザの「ハードウェア アクセラレーション」がオンになっているか確認してください。
+
+## 開発
+
+```bash
+npm install
+npm run dev       # http://localhost:5173
+npm run build     # dist/ に静的ファイル一式
+```
+
+開発時は `?sample=samples/xxx.fbx` を付けるとモデルを自動で読み込み、`window.__sg` から生成・検証を呼べる(`samples/` は git 管理外)。
+本番ビルドには検証用のコードは入らない。
+
+### GitHub Pages で公開する
+
+`main` に push すると `.github/workflows/deploy.yml` がビルドして公開する。
+初回だけ、リポジトリの **Settings → Pages → Build and deployment → Source** を **GitHub Actions** にする。
+出力は相対パスなので、`https://<user>.github.io/<repo>/` のようなサブパスでもそのまま動く。
+
+## 処理の流れ
+
+| 段階 | ファイル | Houdini 版の対応 |
+|---|---|---|
+| モデルを溶接・法線再計算 | `src/core/surface.ts` | `raster_normals` / `drop_degenerate` |
+| 流れ(カーブ + 基本の向き → 頂点ベクトル場) | `src/core/flow.ts` | `row_direction` / `smooth_rowdir` |
+| 鱗の配置(サンプル間引き法 + 面上の押し広げ, Worker) | `src/core/scatter.ts` / `relax.ts` | `scatter_scales`(緩和 400 回) |
+| UV 焼き込み → パディング → 敷き詰め → ノーマル/AO → 着色 | `src/gpu/` | `bake_geo` / `pad_*` / `tiler` / `tiler_shade` |
+| 鱗ごとの色を元テクスチャから決める(鱗の中心の UV の色) | `src/core/colorsource.ts` | — |
+| 離れた部位の鱗を混ぜない(三角形 × 鱗の禁止ペア, Worker) | `src/core/separation.ts` | `mesh_cells` の到達表 / `geo_test` |
+| 実出力の検証(穴・UV の切れ目・鱗の間隔・テクスチャ色) | `src/verify.ts` | — |
+
+## Houdini 版との違い
+
+- 鱗の配置はサンプル間引き法(候補 3 倍)のあと、面の上を歩かせて 40 回押し広げる(`src/core/relax.ts`)。
+  最近傍距離の変動係数 0.043 / 隙間 99% 点 0.625 × 間隔(Houdini 緩和 400 回: 0.047 / 0.608)
+- 離れた部位の判定は画素ごとではなく「三角形 × 鱗」の組で事前に行い、GPU には禁止する組だけを渡す。
+  面上距離の下限は「三角形の角までの辺の経路の最短 − 三角形の最長辺」で控えめに取るので、中点テストは使わない
+- 背と腹の塗り分けは 2 色(一番上の鱗の法線で判定し、鱗 1 枚単位で切り替える)
+- UV が 0〜1 の外にある三角形は重心のある枠ごと 0〜1 に戻す(Unity は UDIM を扱えないため、タイルは分けない)
+
+## ライセンス
+
+[MIT](LICENSE) © 2026 Leu
