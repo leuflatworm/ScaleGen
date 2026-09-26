@@ -4,6 +4,7 @@
 import { buildHashGrid, cellHash, nextPow2 } from './hashgrid';
 import { tangentDir } from './flow';
 import { relaxOnSurface } from './relax';
+import { hasSizeField, sizeAt, sizeRange, type SizeFieldInput } from './sizefield';
 
 export interface ScatterInput {
   positions: Float32Array;
@@ -16,6 +17,7 @@ export interface ScatterInput {
   spacing: number;          // 鱗の間隔 [m]。枚数 = 面積 / spacing²
   seed: number;
   relaxIterations?: number; // 間引きのあとの押し広げ回数
+  size?: SizeFieldInput | null; // 場所ごとの鱗の大きさ(サイズマップ)。無ければどこでも 1
 }
 
 export interface Scales {
@@ -28,6 +30,7 @@ export interface Scales {
   uv: Float32Array;      // N*2 鱗の中心の UV
   mat: Uint16Array;      // N   鱗の中心が乗っているマテリアル
   tri: Uint32Array;      // N   鱗の中心が乗っている三角形
+  ssz: Float32Array;     // N   鱗ごとの大きさの倍率(サイズマップ。無ければ 1)
   area: number;
 }
 
@@ -66,48 +69,98 @@ export function scatterScales(inp: ScatterInput, onProgress?: Progress): Scales 
     tlist.push(t);
     cdf.push(area);
   }
-  const N = Math.max(1, Math.round(area / (inp.spacing * inp.spacing)));
-  // 候補の倍率。論文の既定は 5 倍だが、3 倍でも最近傍距離の分布はほぼ同じで 2.5 倍速い
-  // (実測 10 万枚: 5 倍 4.6 秒 / 3 倍 1.8 秒、最近傍距離 1% 点 0.685 → 0.655 × 間隔)
-  const M = N * 3;
-
-  // --- 候補を撒く ---
-  const cpos = new Float32Array(M * 3);
-  const ctri = new Uint32Array(M);
-  const cbar = new Float32Array(M * 2);
-  for (let i = 0; i < M; i++) {
-    const r = rng() * area;
+  // 面積に比例して三角形と重心座標を 1 つ選ぶ
+  const pick = (rand: () => number): [number, number, number] => {
+    const r = rand() * area;
     let lo = 0, hi = cdf.length - 1;
     while (lo < hi) { const mid = (lo + hi) >> 1; if (cdf[mid] < r) lo = mid + 1; else hi = mid; }
     const t = tlist[lo];
-    let u = rng(), v = rng();
+    let u = rand(), v = rand();
     if (u + v > 1) { u = 1 - u; v = 1 - v; }
-    const a = tris[t * 3], b = tris[t * 3 + 1], c = tris[t * 3 + 2];
-    for (let k = 0; k < 3; k++) {
-      cpos[i * 3 + k] = P[a * 3 + k] * (1 - u - v) + P[b * 3 + k] * u + P[c * 3 + k] * v;
+    return [t, u, v];
+  };
+  const field = hasSizeField(inp.size) ? inp.size : null;
+  // 三角形 t の重心座標 (u, v) での大きさの倍率
+  const sizeOf = (t: number, u: number, v: number) => {
+    const q = inp.triUV, w = 1 - u - v;
+    return sizeAt(field!, triMat[t], q[t * 6] * w + q[t * 6 + 2] * u + q[t * 6 + 4] * v, q[t * 6 + 1] * w + q[t * 6 + 3] * u + q[t * 6 + 5] * v);
+  };
+
+  let N: number, M: number;
+  let cpos: Float32Array, ctri: Uint32Array, cbar: Float32Array;
+  let csize: Float32Array | undefined;
+  if (!field) {
+    N = Math.max(1, Math.round(area / (inp.spacing * inp.spacing)));
+    // 候補の倍率。論文の既定は 5 倍だが、3 倍でも最近傍距離の分布はほぼ同じで 2.5 倍速い
+    // (実測 10 万枚: 5 倍 4.6 秒 / 3 倍 1.8 秒、最近傍距離 1% 点 0.685 → 0.655 × 間隔)
+    M = N * 3;
+
+    // --- 候補を撒く ---
+    cpos = new Float32Array(M * 3);
+    ctri = new Uint32Array(M);
+    cbar = new Float32Array(M * 2);
+    for (let i = 0; i < M; i++) {
+      const [t, u, v] = pick(rng);
+      const a = tris[t * 3], b = tris[t * 3 + 1], c = tris[t * 3 + 2];
+      for (let k = 0; k < 3; k++) {
+        cpos[i * 3 + k] = P[a * 3 + k] * (1 - u - v) + P[b * 3 + k] * u + P[c * 3 + k] * v;
+      }
+      ctri[i] = t; cbar[i * 2] = u; cbar[i * 2 + 1] = v;
     }
-    ctri[i] = t; cbar[i * 2] = u; cbar[i * 2 + 1] = v;
+  } else {
+    // --- サイズマップあり: 密度 1/s² で撒く ---
+    // 枚数 = ∫ 1/(間隔 × s)² dA。面上の一様な点で 1/s² の平均を見積もる(乱数は配置と別の系列)
+    const est = mulberry32(inp.seed * 6151 + 29);
+    const K = 20000;
+    let accW = 0;
+    for (let k = 0; k < K; k++) { const [t, u, v] = pick(est); const s = sizeOf(t, u, v); accW += 1 / (s * s); }
+    N = Math.max(1, Math.round((area / (inp.spacing * inp.spacing)) * (accW / K)));
+    M = N * 3;
+    // 一様に撒いた点を、1/s² に比例する確率で受け入れる(小さい鱗の所ほど多く残る)
+    const smin = sizeRange(field).min;
+    const wmax = 1 / (smin * smin);
+    cpos = new Float32Array(M * 3); ctri = new Uint32Array(M); cbar = new Float32Array(M * 2); csize = new Float32Array(M);
+    let i = 0;
+    for (let tries = 0; i < M && tries < M * wmax * 8 + 1000; tries++) {
+      const [t, u, v] = pick(rng);
+      const s = sizeOf(t, u, v);
+      if (rng() * wmax > 1 / (s * s)) continue;
+      const a = tris[t * 3], b = tris[t * 3 + 1], c = tris[t * 3 + 2];
+      for (let k = 0; k < 3; k++) {
+        cpos[i * 3 + k] = P[a * 3 + k] * (1 - u - v) + P[b * 3 + k] * u + P[c * 3 + k] * v;
+      }
+      ctri[i] = t; cbar[i * 2] = u; cbar[i * 2 + 1] = v; csize[i] = s;
+      i++;
+    }
+    M = i;
+    N = Math.min(N, M);
   }
 
-  const keep = eliminate(cpos, M, N, area, (f) => onProgress?.('eliminate', f));
+  // 鱗の間隔 d0: サイズマップ無しは従来どおり √(面積/枚数)、ありは指定の間隔(局所の間隔 = d0 × s)
+  const keep = field
+    ? eliminate(cpos, M, N, area, (f) => onProgress?.('eliminate', f), csize, inp.spacing / Math.sqrt(2 * Math.sqrt(3)))
+    : eliminate(cpos, M, N, area, (f) => onProgress?.('eliminate', f));
 
   // --- 面の上で押し広げる ---
   const n = keep.length;
   const kpos = new Float32Array(n * 3), ktri = new Uint32Array(n), kbar = new Float32Array(n * 2);
+  const ksize = csize ? new Float32Array(n) : undefined;
   for (let s = 0; s < n; s++) {
     const i = keep[s];
     kpos.set(cpos.subarray(i * 3, i * 3 + 3), s * 3);
     ktri[s] = ctri[i]; kbar[s * 2] = cbar[i * 2]; kbar[s * 2 + 1] = cbar[i * 2 + 1];
+    if (ksize && csize) ksize[s] = csize[i];
   }
   relaxOnSurface({
-    positions: P, tris, triMat, matMask: inp.matMask, spacing: Math.sqrt(area / n),
-    iterations: inp.relaxIterations ?? RELAX_ITERATIONS,
+    positions: P, tris, triMat, matMask: inp.matMask, spacing: field ? inp.spacing : Math.sqrt(area / n),
+    iterations: inp.relaxIterations ?? RELAX_ITERATIONS, sizes: ksize,
   }, n, kpos, ktri, kbar, (f) => onProgress?.('relax', f));
 
   // --- 1 枚ごとの属性 ---
   const pos = new Float32Array(n * 3), nrm = new Float32Array(n * 3);
   const rowdir = new Float32Array(n * 3), coldir = new Float32Array(n * 3), sid = new Float32Array(n);
   const uv = new Float32Array(n * 2), mat = new Uint16Array(n), tri = new Uint32Array(n);
+  const ssz = new Float32Array(n).fill(1);
   const srng = mulberry32(inp.seed * 104729 + 3);
   for (let s = 0; s < n; s++) {
     const t = ktri[s], u = kbar[s * 2], v = kbar[s * 2 + 1], w = 1 - u - v;
@@ -137,37 +190,61 @@ export function scatterScales(inp: ScatterInput, onProgress?: Progress): Scales 
     uv[s * 2 + 1] = q[t * 6 + 1] * w + q[t * 6 + 3] * u + q[t * 6 + 5] * v;
     mat[s] = triMat[t];
     tri[s] = t;
+    // 大きさは配置したときの値を持ち続ける。押し広げ後の位置で読み直すと、小さい鱗の間隔で並んだ点が
+    // 継ぎ目を越えて「大きい鱗」になり、境目に大きい鱗が密集して互いを隠す
+    // (実測: 境目の大きい鱗どうしの最近傍 2.22mm / 内側 5.81mm、見える面積 0.62 倍)
+    if (ksize) ssz[s] = ksize[s];
   }
-  return { count: n, pos, nrm, rowdir, coldir, sid, uv, mat, tri, area };
+  return { count: n, pos, nrm, rowdir, coldir, sid, uv, mat, tri, ssz, area };
 }
 
 // Yuksel, "Sample Elimination for Generating Poisson Disk Sample Sets" (2015)
-function eliminate(cpos: Float32Array, M: number, N: number, area: number, onProgress?: (f: number) => void): Uint32Array {
-  const rmax = Math.sqrt(area / (2 * Math.sqrt(3) * N));
+// sizes: 候補ごとの大きさの倍率(サイズマップ)。2 点の間の基準距離を 2 点の倍率の平均で伸縮する。
+// 省略時は一様で、従来と同じ計算になる。rmaxBase: 倍率 1 の所の rmax(省略時は面積/枚数から)
+function eliminate(
+  cpos: Float32Array, M: number, N: number, area: number, onProgress?: (f: number) => void,
+  sizes?: Float32Array, rmaxBase?: number,
+): Uint32Array {
+  const rmax = rmaxBase ?? Math.sqrt(area / (2 * Math.sqrt(3) * N));
   const r2 = 2 * rmax;
   const rmin = rmax * (1 - Math.pow(N / M, 1.5)) * 0.65;
-  const r2sq = r2 * r2;
+  let smax = 1;
+  if (sizes) { smax = 0; for (let i = 0; i < M; i++) smax = Math.max(smax, sizes[i]); }
+  const cellR = sizes ? r2 * smax : r2;   // 近傍を集める半径(いちばん大きい鱗に合わせる)
+  const r2sq = cellR * cellR;
   let ox = Infinity, oy = Infinity, oz = Infinity;
   for (let i = 0; i < M; i++) {
     ox = Math.min(ox, cpos[i * 3]); oy = Math.min(oy, cpos[i * 3 + 1]); oz = Math.min(oz, cpos[i * 3 + 2]);
   }
-  ox -= r2; oy -= r2; oz -= r2;
-  const grid = buildHashGrid(cpos, M, r2, [ox, oy, oz], nextPow2(M));
+  ox -= cellR; oy -= cellR; oz -= cellR;
+  const grid = buildHashGrid(cpos, M, cellR, [ox, oy, oz], nextPow2(M));
   const { start, order, mask } = grid;
   // 点ごとのセル座標。バケットの中で別のセルの点(ハッシュ衝突)と、同じバケットの二度引きを除く
   const cell = new Int32Array(M * 3);
   for (let i = 0; i < M; i++) {
-    cell[i * 3] = Math.floor((cpos[i * 3] - ox) / r2);
-    cell[i * 3 + 1] = Math.floor((cpos[i * 3 + 1] - oy) / r2);
-    cell[i * 3 + 2] = Math.floor((cpos[i * 3 + 2] - oz) / r2);
+    cell[i * 3] = Math.floor((cpos[i * 3] - ox) / cellR);
+    cell[i * 3 + 1] = Math.floor((cpos[i * 3 + 1] - oy) / cellR);
+    cell[i * 3 + 2] = Math.floor((cpos[i * 3 + 2] - oz) / cellR);
   }
-  const wfun = (d2: number) => {
+  const wUniform = (d2: number) => {
     let d = Math.sqrt(d2);
     if (d < rmin) d = rmin;
     const x = 1 - d / r2;
     const x2 = x * x, x4 = x2 * x2;
     return x4 * x4;
   };
+  const wSized = (d2: number, i: number, j: number) => {
+    const sij = (sizes![i] + sizes![j]) * 0.5;
+    const rij = r2 * sij;
+    if (d2 >= rij * rij) return 0;
+    let d = Math.sqrt(d2);
+    const rm = rmin * sij;
+    if (d < rm) d = rm;
+    const x = 1 - d / rij;
+    const x2 = x * x, x4 = x2 * x2;
+    return x4 * x4;
+  };
+  const wfun = (d2: number, i: number, j: number) => (sizes ? wSized(d2, i, j) : wUniform(d2));
   // i から r2 以内の点を nb / nd2 に集める
   let nb = new Int32Array(256), nd2 = new Float64Array(256);
   const gather = (i: number): number => {
@@ -199,7 +276,7 @@ function eliminate(cpos: Float32Array, M: number, N: number, area: number, onPro
     if (i % everyW === 0) onProgress?.(0.4 * (i / M));
     const n = gather(i);
     let s = 0;
-    for (let k = 0; k < n; k++) s += wfun(nd2[k]);
+    for (let k = 0; k < n; k++) s += wfun(nd2[k], i, nb[k]);
     W[i] = s;
   }
 
@@ -236,7 +313,7 @@ function eliminate(cpos: Float32Array, M: number, N: number, area: number, onPro
     for (let k = 0; k < n; k++) {
       const j = nb[k];
       if (!alive[j]) continue;
-      W[j] -= wfun(nd2[k]);
+      W[j] -= wfun(nd2[k], i, j);
       down(hpos[j]);
     }
   }

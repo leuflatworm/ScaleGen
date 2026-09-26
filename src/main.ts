@@ -14,6 +14,7 @@ import { downloadZip, flipRowsRGBA8, png8, png8Exact, pngHeight16 } from './expo
 import { placementStats, verify, verifyScaleColors } from './verify';
 import { loadSourceImage, scaleColorsFromSources, type SourceImage } from './core/colorsource';
 import { applyMask } from './core/maskfilter';
+import { sizeAt, toSizeMapData, type SizeFieldInput, type SizeMapData } from './core/sizefield';
 import { checkSupport } from './support';
 import { attachNumberFields, sliderValue } from './numfield';
 import {
@@ -64,6 +65,8 @@ const state = {
   timings: {} as Record<string, number>,
   sources: new Map<number, SourceImage>(),          // マテリアルごとの元の色テクスチャ
   masks: new Map<number, SourceImage>(),            // マテリアルごとの「鱗を貼らない範囲」のマスク
+  sizeMaps: new Map<number, SourceImage>(),         // マテリアルごとのサイズマップ
+  sizeMapData: new Map<number, SizeMapData>(),      // 同じものを Worker に渡せる形(明るさ 1 チャンネル)にしたもの
   maskRemoved: 0,                                    // マスクで取り除いた鱗の数
   sourceTex: new Map<number, THREE.Texture>(),
 };
@@ -104,6 +107,8 @@ function rebuildSurface(): void {
   state.matMask = s.materials.map(() => true);
   state.sources.clear();
   state.masks.clear();
+  state.sizeMaps.clear();
+  state.sizeMapData.clear();
   state.sourceTex.forEach((t) => t.dispose());
   state.sourceTex.clear();
   clearResults();
@@ -125,6 +130,7 @@ function rebuildSurface(): void {
       updateCount();
       renderSourceList();
       renderMaskList();
+      renderSizeMapList();
     });
     list.appendChild(l);
   });
@@ -132,6 +138,7 @@ function rebuildSurface(): void {
   updateCount();
   renderSourceList();
   renderMaskList();
+  renderSizeMapList();
 }
 
 $('modelFile').addEventListener('change', async (e) => {
@@ -243,10 +250,38 @@ $('showFlow').addEventListener('change', (e) => viewer.setFlowVisible((e.target 
 
 // ---------- 4. 大きさ ----------
 function spacing(): number { return num('size') * 0.001; }
+
+// サイズマップ(選んだマテリアルに読み込まれたものだけ)。無ければ null = どこでも倍率 1
+function sizeField(): SizeFieldInput | null {
+  const maps: Record<number, SizeMapData> = {};
+  for (const [mi, d] of state.sizeMapData) if (state.matMask[mi]) maps[mi] = d;
+  return Object.keys(maps).length ? { maps, min: num('sizeBlack') } : null;
+}
+
+// 鱗の枚数の見込み = ∫ 1/(間隔 × s)² dA。サイズマップがあれば三角形の角で 1/s² を平均して積む
+function estimateCount(s: Surface): number {
+  const f = sizeField();
+  const a = surfaceArea(s, state.matMask);
+  if (!f) return Math.round(a / spacing() ** 2);
+  const P = s.positions, T = s.tris, q = s.triUV;
+  let acc = 0;
+  for (let t = 0; t < s.triMat.length; t++) {
+    if (!state.matMask[s.triMat[t]]) continue;
+    const i0 = T[t * 3], i1 = T[t * 3 + 1], i2 = T[t * 3 + 2];
+    const ux = P[i1 * 3] - P[i0 * 3], uy = P[i1 * 3 + 1] - P[i0 * 3 + 1], uz = P[i1 * 3 + 2] - P[i0 * 3 + 2];
+    const vx = P[i2 * 3] - P[i0 * 3], vy = P[i2 * 3 + 1] - P[i0 * 3 + 1], vz = P[i2 * 3 + 2] - P[i0 * 3 + 2];
+    const ta = 0.5 * Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
+    let w = 0;
+    for (let c = 0; c < 3; c++) { const sz = sizeAt(f, s.triMat[t], q[t * 6 + c * 2], q[t * 6 + c * 2 + 1]); w += 1 / (sz * sz); }
+    acc += ta * (w / 3);
+  }
+  return Math.round(acc / spacing() ** 2);
+}
+
 function updateCount(): void {
   if (!state.surface) { $('countInfo').textContent = ''; return; }
   const a = surfaceArea(state.surface, state.matMask);
-  const n = Math.round(a / spacing() ** 2);
+  const n = estimateCount(state.surface);
   // テクスチャ上で鱗 1 枚が何画素になるか(小さすぎると模様がつぶれる)
   const res = Number($<HTMLSelectElement>('res').value);
   const texel = Math.sqrt(a / Math.max(uvArea(state.surface, state.matMask), 1e-9)) / res;
@@ -259,7 +294,7 @@ function updateCount(): void {
     `テクスチャ上の鱗 1 枚: 約 ${px.toFixed(0)} px(${res}px のとき)` +
     (warn.length ? `\n${warn.join('\n')}` : '');
 }
-['size', 'overlap', 'sizeVar', 'res'].forEach((id) => $(id).addEventListener('input', updateCount));
+['size', 'overlap', 'sizeVar', 'res', 'sizeBlack'].forEach((id) => $(id).addEventListener('input', updateCount));
 
 // ---------- 5. 色 ----------
 function hex2rgb(h: string): [number, number, number] {
@@ -362,15 +397,17 @@ async function setSource(mi: number, file: File): Promise<void> {
   reshade();
 }
 
-// --- 鱗を貼らない範囲(マスク) ---
-function renderMaskList(): void {
-  const list = $('maskList');
+// --- マテリアルごとの画像の欄(マスク・サイズマップで共通) ---
+function renderImageSlots(
+  listId: string, images: Map<number, SourceImage>, emptyText: string, onSet: (mi: number, file: File | null) => void,
+): void {
+  const list = $(listId);
   list.innerHTML = '';
   const s = state.surface;
   if (!s) { list.innerHTML = '<div class="hint">先にモデルを読み込んでください</div>'; return; }
   s.materials.forEach((name, mi) => {
     if (!state.matMask[mi]) return;
-    const m = state.masks.get(mi);
+    const m = images.get(mi);
     const row = document.createElement('div');
     row.className = 'src';
     const thumb = document.createElement('canvas');
@@ -378,7 +415,7 @@ function renderMaskList(): void {
     if (m) thumb.getContext('2d')!.drawImage(m.canvas, 0, 0, 40, 40);
     const label = document.createElement('div');
     label.className = 'name';
-    label.innerHTML = `${escapeHtml(name)}<small>${m ? escapeHtml(m.name) : 'なし(全体に貼る)'}</small>`;
+    label.innerHTML = `${escapeHtml(name)}<small>${m ? escapeHtml(m.name) : emptyText}</small>`;
     const tools = document.createElement('div');
     tools.className = 'tools';
     const pick = document.createElement('label');
@@ -386,18 +423,23 @@ function renderMaskList(): void {
     pick.innerHTML = '画像を選ぶ<input type="file" accept="image/png,image/jpeg,image/webp">';
     pick.querySelector('input')!.addEventListener('change', async (e) => {
       const f = (e.target as HTMLInputElement).files?.[0];
-      if (f) await setMask(mi, f);
+      if (f) onSet(mi, f);
     });
     tools.appendChild(pick);
     if (m) {
       const clear = document.createElement('button');
       clear.textContent = '外す';
-      clear.addEventListener('click', () => setMask(mi, null));
+      clear.addEventListener('click', () => onSet(mi, null));
       tools.appendChild(clear);
     }
     row.append(thumb, label, tools);
     list.appendChild(row);
   });
+}
+
+// --- 鱗を貼らない範囲(マスク) ---
+function renderMaskList(): void {
+  renderImageSlots('maskList', state.masks, 'なし(全体に貼る)', (mi, f) => { void setMask(mi, f); });
 }
 
 // マスクは鱗の配置が決まったあとで効くので、生成済みなら作り直す(配置は同じ乱数で同じ結果になる)
@@ -410,6 +452,25 @@ async function setMask(mi: number, file: File | null): Promise<void> {
 $('maskInvert').addEventListener('change', () => {
   if (state.masks.size > 0 && state.results.size > 0) generate();
 });
+
+// --- サイズマップ ---
+function renderSizeMapList(): void {
+  renderImageSlots('sizeMapList', state.sizeMaps, 'なし(どこも同じ大きさ)', (mi, f) => { void setSizeMap(mi, f); });
+}
+// 鱗の配置から変わるので、生成済みなら作り直す
+async function setSizeMap(mi: number, file: File | null): Promise<void> {
+  if (file) {
+    const img = await loadSourceImage(file);
+    state.sizeMaps.set(mi, img);
+    state.sizeMapData.set(mi, toSizeMapData(img));
+  } else {
+    state.sizeMaps.delete(mi);
+    state.sizeMapData.delete(mi);
+  }
+  renderSizeMapList();
+  updateCount();
+  if (state.results.size > 0) generate();
+}
 
 // 生成済みの鱗に、中心の位置の色を割り当てる(敷き詰めのやり直しは不要)
 function applyScaleColors(): void {
@@ -506,7 +567,7 @@ async function generate(): Promise<void> {
   const mats = s.materials.map((_, i) => i).filter((i) => state.matMask[i]);
   if (mats.length === 0) { setStatus('鱗を付けるマテリアルを選んでください'); return; }
   const sp = spacing();
-  const estimate = Math.round(surfaceArea(s, state.matMask) / (sp * sp));
+  const estimate = estimateCount(s);   // サイズマップがあれば小さい所ほど多く数える
   if (estimate > CONFIRM_COUNT &&
     !window.confirm(`鱗が約 ${estimate.toLocaleString()} 枚になり、時間がかかります(途中で中止もできます)。生成しますか?`)) return;
 
@@ -533,7 +594,7 @@ async function generate(): Promise<void> {
     const sc = await runScatter({
       scatter: {
         positions: s.positions, normals: s.normals, tris: s.tris, triMat: s.triMat, triUV: s.triUV,
-        flow: state.flow, matMask: state.matMask, spacing: sp, seed: state.seed,
+        flow: state.flow, matMask: state.matMask, spacing: sp, seed: state.seed, size: sizeField(),
       },
       // 面上距離 / 直線距離 > 2.5 なら別の部位(Houdini 版 geo_ratio と同じ値)
       separation: separate ? { rad: Generator.reachRadius(tp), ratio: 2.5 } : null,
@@ -744,6 +805,7 @@ if (import.meta.env.DEV) {
     setCurves(curves: { points: number[] }[]) { viewer.curves = curves; updateFlow(); },
     setSource,
     setMask,
+    setSizeMap,
     verifyColors() {
       return [...state.results].filter(([mi]) => state.sources.has(mi)).map(([mi, r]) =>
         verifyScaleColors(state.scales!, state.sources.get(mi)!, mi, state.shaded.get(mi)!.color, gen.readAux(r), gen.readPos(r), r.res));

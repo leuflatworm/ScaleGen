@@ -14,6 +14,7 @@ export interface RelaxInput {
   matMask: boolean[];
   spacing: number;       // 鱗の間隔 d0 = √(面積 / 枚数)
   iterations: number;
+  sizes?: Float32Array;  // 点ごとの大きさの倍率(サイズマップ)。局所の間隔 = d0 × 倍率。省略時は一様
 }
 
 // 反発の強さ(1 回に動かす量 = 力 × 六方配置の間隔 × GAIN)と届く距離(六方配置の間隔 × REACH)。
@@ -35,11 +36,14 @@ export function relaxOnSurface(
   const R = hex * REACH;
   const maxStep = inp.spacing * 0.25;
   const disp = new Float32Array(n * 3);
+  const sizes = inp.sizes;
+  let smax = 1;
+  if (sizes) { smax = 0; for (let i = 0; i < n; i++) smax = Math.max(smax, sizes[i]); }
 
   // 近傍リスト(Verlet リスト): R より skin だけ広く取っておき、
   // リストを作ってからの移動量の最大が skin/2 を超えるまで使い回す(毎回の格子探索を省く)
-  const skin = inp.spacing * 0.3;
-  const RL = R + skin;
+  const skin = inp.spacing * 0.3 * (sizes ? smax : 1);
+  const RL = sizes ? (R * smax) + skin : R + skin;
   const table = nextPow2(n);
   const cell = new Int32Array(n * 3);
   const ref = new Float32Array(n * 3);    // リストを作ったときの位置
@@ -87,24 +91,29 @@ export function relaxOnSurface(
       const ti = tri[i];
       const nx = fn[ti * 3], ny = fn[ti * 3 + 1], nz = fn[ti * 3 + 2];
       let fx = 0, fy = 0, fz = 0;
+      const si = sizes ? sizes[i] : 1;
       for (let k = nbStart[i], e = nbStart[i + 1]; k < e; k++) {
         const j = nbList[k];
         const ex = x - pos[j * 3], ey = y - pos[j * 3 + 1], ez = z - pos[j * 3 + 2];
         const d = Math.sqrt(ex * ex + ey * ey + ez * ez);
-        if (d >= R || d < 1e-12) continue;
+        // 2 点の間の反発が届く距離は、2 点の大きさの平均で伸縮する
+        const Rij = sizes ? R * (si + sizes[j]) * 0.5 : R;
+        if (d >= Rij || d < 1e-12) continue;
         // 裏側(薄い部位の反対の面)の点とは反発しない
         const tj = tri[j];
         const facing = nx * fn[tj * 3] + ny * fn[tj * 3 + 1] + nz * fn[tj * 3 + 2];
         if (facing <= 0) continue;
-        const w = (1 - d / R) * (1 - d / R) * facing / d;
+        const w = (1 - d / Rij) * (1 - d / Rij) * facing / d;
         fx += ex * w; fy += ey * w; fz += ez * w;
       }
       // 接平面に落とす
       const fnrm = fx * nx + fy * ny + fz * nz;
       fx -= fnrm * nx; fy -= fnrm * ny; fz -= fnrm * nz;
-      let mx = fx * hex * GAIN, my = fy * hex * GAIN, mz = fz * hex * GAIN;
+      const hexI = sizes ? hex * si : hex;
+      const stepI = sizes ? maxStep * si : maxStep;
+      let mx = fx * hexI * GAIN, my = fy * hexI * GAIN, mz = fz * hexI * GAIN;
       const ml = Math.hypot(mx, my, mz);
-      if (ml > maxStep) { mx *= maxStep / ml; my *= maxStep / ml; mz *= maxStep / ml; }
+      if (ml > stepI) { mx *= stepI / ml; my *= stepI / ml; mz *= stepI / ml; }
       disp[i * 3] = mx; disp[i * 3 + 1] = my; disp[i * 3 + 2] = mz;
     }
 

@@ -81,6 +81,13 @@
       <h2><span>4</span>大きさ</h2>
       <div class="slider"><label>鱗の大きさ</label><input id="size" type="range" min="0.5" max="50" step="0.1" value="6" data-min="0.1" data-max="500" data-unit="mm" /></div>
       <div id="countInfo" class="info"></div>
+      <details id="sizeMapBox">
+        <summary>場所ごとに大きさを変える(サイズマップ)</summary>
+        <p class="hint">モデルと同じ UV の白黒画像を読み込むと、明るさに応じて鱗が小さくなります。
+          白 = 「鱗の大きさ」のまま、黒 = 「最小倍率」まで小さく。小さくした所ほど鱗が多く並びます。</p>
+        <div id="sizeMapList" class="srclist"></div>
+        <div class="slider"><label>最小倍率</label><input id="sizeBlack" type="range" min="0.1" max="1" step="0.05" value="0.5" /></div>
+      </details>
       <details>
         <summary>詳しい設定</summary>
         <div class="slider"><label>重なり</label><input id="overlap" type="range" min="1.5" max="3.5" step="0.05" value="2.2" data-min="1" data-max="6" /></div>

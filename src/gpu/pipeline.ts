@@ -62,6 +62,7 @@ export class Generator {
     col: THREE.DataTexture;  // 鱗ごとの色(並べ替え後の順)
     forbid: THREE.DataTexture; forbidW: number; forbidMask: number; forbidCount: number;
     origin: THREE.Vector3; cell: number; rad: number;
+    bucketCap: number;   // 1 つのバケットから読む鱗の上限(= 実際の最大個数。以前は 64 固定)
   } | null = null;
   private tp: TileParams | null = null;
 
@@ -98,7 +99,10 @@ export class Generator {
   setScales(sc: Scales, tp: TileParams, forbid: Uint32Array = new Uint32Array(0)): void {
     this.disposeGrid();
     this.tp = tp;
-    const rad = Generator.reachRadius(tp);
+    // サイズマップ: 鱗の枠は倍率 s に比例するので、探索半径はいちばん大きい鱗に合わせる
+    let smax = 1;
+    for (let i = 0; i < sc.count; i++) smax = Math.max(smax, sc.ssz[i]);
+    const rad = Generator.reachRadius(tp) * smax;
     const cell = rad * 1.01;   // 1% 余裕: CPU(double)と GPU(float)のセル割りの差で取りこぼさない
     let ox = Infinity, oy = Infinity, oz = Infinity;
     for (let i = 0; i < sc.count; i++) {
@@ -111,7 +115,11 @@ export class Generator {
     const tableW = Math.min(4096, tableSize);
     const tableH = Math.ceil(tableSize / tableW);
     const td = new Float32Array(tableW * tableH * 2);
-    for (let h = 0; h < tableSize; h++) { td[h * 2] = g.start[h]; td[h * 2 + 1] = g.start[h + 1] - g.start[h]; }
+    let maxBucket = 0;
+    for (let h = 0; h < tableSize; h++) {
+      td[h * 2] = g.start[h]; td[h * 2 + 1] = g.start[h + 1] - g.start[h];
+      maxBucket = Math.max(maxBucket, g.start[h + 1] - g.start[h]);
+    }
     const table = dataTex(td, tableW, tableH, THREE.RGFormat);
 
     const scaleW = Math.min(SCALE_TEX_W, Math.max(1, sc.count));
@@ -121,17 +129,17 @@ export class Generator {
     for (let q = 1; q < forbid.length; q += 2) hasForbid[forbid[q]] = 1;
     for (let k = 0; k < sc.count; k++) {
       const i = g.order[k];
-      const jr = 1 + tp.sizeVar * (sc.sid[i] - 0.5) * 2;
+      const jr = (1 + tp.sizeVar * (sc.sid[i] - 0.5) * 2) * sc.ssz[i];
       d[0].set([sc.pos[i * 3], sc.pos[i * 3 + 1], sc.pos[i * 3 + 2], sc.sid[i]], k * 4);
       d[1].set([sc.rowdir[i * 3], sc.rowdir[i * 3 + 1], sc.rowdir[i * 3 + 2], jr], k * 4);
       d[2].set([sc.coldir[i * 3], sc.coldir[i * 3 + 1], sc.coldir[i * 3 + 2], hasForbid[i]], k * 4);
-      d[3].set([sc.nrm[i * 3], sc.nrm[i * 3 + 1], sc.nrm[i * 3 + 2], 0], k * 4);
+      d[3].set([sc.nrm[i * 3], sc.nrm[i * 3 + 1], sc.nrm[i * 3 + 2], sc.ssz[i]], k * 4);
     }
     this.grid = {
       table, tableW, mask: tableSize - 1,
       s: d.map((a) => dataTex(a, scaleW, scaleH, THREE.RGBAFormat)), scaleW,
       origin: new THREE.Vector3(...origin), cell, rad,
-      order: g.order, count: sc.count,
+      order: g.order, count: sc.count, bucketCap: Math.max(64, maxBucket),
       col: dataTex(new Float32Array(scaleW * scaleH * 4), scaleW, scaleH, THREE.RGBAFormat),
       ...forbidTable(forbid, g.order, sc.count),
     };
@@ -218,6 +226,7 @@ export class Generator {
         tTri: { value: pad.textures[2] }, tForbid: { value: g.forbid }, uForbidW: { value: g.forbidW },
         uForbidMask: { value: g.forbidMask }, uUseForbid: { value: g.forbidCount > 0 ? 1 : 0 },
         tTile: { value: tile }, tTileH: { value: tileH }, uHasTileH: { value: tileH ? 1 : 0 },
+        uBucketCap: { value: g.bucketCap },
         uTableW: { value: g.tableW }, uScaleW: { value: g.scaleW }, uTableMask: { value: g.mask },
         uOrigin: { value: g.origin }, uCell: { value: g.cell }, uRad: { value: g.rad },
         uTileHalf: { value: new THREE.Vector2(tp.tileW * 0.5, tp.tileH * 0.5) },

@@ -133,13 +133,14 @@ uniform sampler2D tForbid;  // 禁止ペア (三角形, 鱗) のハッシュ表�
 uniform int uForbidW;
 uniform uint uForbidMask;
 uniform int uUseForbid;
-uniform sampler2D tS3;      // 鱗: 法線.xyz
+uniform sampler2D tS3;      // 鱗: 法線.xyz, 大きさの倍率(サイズマップ)
 uniform sampler2D tTile;
 uniform sampler2D tTileH;   // 鱗の高さ画像(任意。タイル画像と同じ配置)
 uniform int uHasTileH;
 uniform int uTableW;
 uniform int uScaleW;
 uniform uint uTableMask;
+uniform int uBucketCap;     // 1 つのバケットから読む鱗の上限
 uniform vec3 uOrigin;
 uniform float uCell;
 uniform float uRad;
@@ -187,6 +188,7 @@ void main() {
   int cid[MAXC];
   float clx[MAXC];
   float cly[MAXC];
+  float ckey[MAXC];   // 重なり順のキー(大きい順に手前)
   int nc = 0;
   float rad2 = uRad * uRad;
 
@@ -198,13 +200,14 @@ void main() {
     seen[ns++] = h;
     vec2 sc = texelFetch(tTable, at(int(h), uTableW), 0).xy;
     int st = int(sc.x);
-    int cnt = min(int(sc.y), 64);
+    int cnt = min(int(sc.y), uBucketCap);
     for (int k = 0; k < cnt; k++) {
       int si = st + k;
       vec4 s0 = texelFetch(tS0, at(si, uScaleW), 0);
       vec3 dv = wp - s0.xyz;
       if (dot(dv, dv) > rad2) continue;
-      vec3 cn = texelFetch(tS3, at(si, uScaleW), 0).xyz;
+      vec4 s3v = texelFetch(tS3, at(si, uScaleW), 0);
+      vec3 cn = s3v.xyz;
       if (dot(cn, wn) < 0.2) continue;                    // 裏側の鱗を拾わない
       vec4 s1 = texelFetch(tS1, at(si, uScaleW), 0);
       vec4 s2 = texelFetch(tS2, at(si, uScaleW), 0);
@@ -214,16 +217,25 @@ void main() {
       float ly = dot(dv, s1.xyz) / (uTileHalf.y * jr) * uSgn; // +1 = 後縁 / -1 = 根元
       if (abs(lx) > 1.0 || abs(ly) > 1.0) continue;         // 枠の外
       if (s2.w > 0.5 && ptri >= 0 && forbidden(ptri, si)) continue;   // 面をたどると遠い部位の鱗
-      if (nc < MAXC) { cid[nc] = si; clx[nc] = lx; cly[nc] = ly; nc++; }
+      // 重なり順のキー = ly × 大きさの倍率 + SIZE_BIAS × (倍率 - 1)。
+      // (1) ly は各鱗の大きさで割った座標なので、大きさの違う 2 枚をそのまま比べると画素ごとに上下が入れ替わり、
+      //     形が混ざる(実測: 大小の境目の 4.7% が両方の鱗の内側で切れていた)。倍率を掛け戻すと 2 枚のキーの差は
+      //     中心どうしの流れ方向の距離だけになり、重なり全体で上下が一定になる(0.1%)。
+      // (2) それだけだと、境目で上流側に並んだ小さい鱗が大きい鱗の上半分を覆い、大きい鱗が境目に沿って
+      //     直線で切れて見える(実測: 境目の大きい鱗の見える面積が内側の 0.63 倍)。大きさがはっきり違う組は
+      //     大きい方を上にする(実際の鱗も大きい鱗の縁が小さい鱗に乗る)。差が小さい組(グラデーション)は流れの順のまま。
+      //     SIZE_BIAS 3: 倍率差 0.7 で 2.1 > 流れの項の最大差 2 なので必ず大きい方が上
+      // 倍率 1 なら ly そのもの(従来と同じ)
+      if (nc < MAXC) { cid[nc] = si; clx[nc] = lx; cly[nc] = ly; ckey[nc] = ly * s3v.w + 3.0 * (s3v.w - 1.0); nc++; }
     }
   }
 
   // 重なり順: 画素がその鱗の後縁寄り(ly が大きい)ほど上。瓦の規則そのもの。
   for (int i = 1; i < nc; i++) {
-    int ci = cid[i]; float xi = clx[i]; float yi = cly[i];
+    int ci = cid[i]; float xi = clx[i]; float yi = cly[i]; float ki = ckey[i];
     int j = i - 1;
-    while (j >= 0 && cly[j] < yi) { cid[j + 1] = cid[j]; clx[j + 1] = clx[j]; cly[j + 1] = cly[j]; j--; }
-    cid[j + 1] = ci; clx[j + 1] = xi; cly[j + 1] = yi;
+    while (j >= 0 && ckey[j] < ki) { cid[j + 1] = cid[j]; clx[j + 1] = clx[j]; cly[j + 1] = cly[j]; ckey[j + 1] = ckey[j]; j--; }
+    cid[j + 1] = ci; clx[j + 1] = xi; cly[j + 1] = yi; ckey[j + 1] = ki;
   }
 
   vec3 acc = vec3(0.0);
@@ -250,6 +262,8 @@ void main() {
       ? textureLod(tTileH, vec2(lx, ly) * 0.5 + 0.5, lod).r
       : pow(clamp(a, 0.0, 1.0), uHPow) * (0.40 + 0.60 * smoothstep(-1.0, 0.90, ly));
     hh *= 1.0 + uVaria * (idh - 0.5);
+    // サイズマップ: 小さい鱗は起伏も比例して低くする(テクスチャ上の勾配をそろえる。Houdini 1.1 と同じ)
+    hh *= min(texelFetch(tS3, at(cid[i], uScaleW), 0).w, 1.0);
     if (wsid < 0.0) { wsid = idh; wctr = s0.xyz; wtop = cid[i]; }
     acc += (1.0 - acca) * a * t.rgb;
     hacc += (1.0 - acca) * a * hh;
@@ -393,7 +407,16 @@ void main() {
     else if (f2 > 1.0 - 0.045 * uFleck) base *= 1.30;
   }
 
-  float groove = 1.0 - smoothstep(0.33, 0.72, aux.x);
+  // 溝の判定は「倍率を掛ける前の高さ」で行う。サイズマップで小さくした鱗は起伏を min(s,1) 倍に下げているので、
+  // そのままの高さで判定すると面全体が溝扱いになって暗くなる(実測: 0.5 倍の側の平均明度 66 / 1 倍の側 106)
+  float hN = aux.x;
+  float topIdx = texelFetch(tCtr, p, 0).w;
+  if (topIdx >= 0.0) {
+    int ti = int(topIdx + 0.5);
+    float ss = texelFetch(tS3, ivec2(ti % uScaleW, ti / uScaleW), 0).w;
+    hN = aux.x / max(min(ss, 1.0), 1e-3);
+  }
+  float groove = 1.0 - smoothstep(0.33, 0.72, hN);
   base *= 1.0 - groove * uGroove * 0.75 * mask;
   base *= mix(1.0, texelFetch(tAO, p, 0).x, 0.6 * uAO);
   if (uGapClear == 1) {

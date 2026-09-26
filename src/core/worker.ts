@@ -13,7 +13,7 @@ self.onmessage = (e: MessageEvent<ScatterJob>) => {
   });
   const sc = r.scales;
   post({ type: 'done', result: r }, [
-    sc.pos.buffer, sc.nrm.buffer, sc.rowdir.buffer, sc.coldir.buffer, sc.sid.buffer, sc.uv.buffer, sc.mat.buffer, sc.tri.buffer,
+    sc.pos.buffer, sc.nrm.buffer, sc.rowdir.buffer, sc.coldir.buffer, sc.sid.buffer, sc.uv.buffer, sc.mat.buffer, sc.tri.buffer, sc.ssz.buffer,
     r.forbid.buffer,
   ]);
 };

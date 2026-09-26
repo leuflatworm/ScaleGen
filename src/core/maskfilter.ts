@@ -61,6 +61,7 @@ export function applyMask(sc: Scales, forbid: Uint32Array, masks: Map<number, So
     pos: pick(sc.pos, 3, f32), nrm: pick(sc.nrm, 3, f32), rowdir: pick(sc.rowdir, 3, f32), coldir: pick(sc.coldir, 3, f32),
     sid: pick(sc.sid, 1, f32), uv: pick(sc.uv, 2, f32),
     mat: pick(sc.mat, 1, (len) => new Uint16Array(len)), tri: pick(sc.tri, 1, (len) => new Uint32Array(len)),
+    ssz: pick(sc.ssz, 1, f32),
     area: sc.area,
   };
   const fb: number[] = [];

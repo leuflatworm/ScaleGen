@@ -18,10 +18,13 @@ export function runScatterJob(job: ScatterJob, onProgress?: Progress): ScatterRe
   const t0 = performance.now();
   const scales = scatterScales(job.scatter, onProgress);
   const t1 = performance.now();
+  // タイルが届く距離はいちばん大きい鱗に合わせる(サイズマップ)
+  let smax = 1;
+  for (let i = 0; i < scales.count; i++) smax = Math.max(smax, scales.ssz[i]);
   const forbid = job.separation
     ? computeSeparation({
       positions: job.scatter.positions, tris: job.scatter.tris, triMat: job.scatter.triMat,
-      matMask: job.scatter.matMask, rad: job.separation.rad, ratio: job.separation.ratio,
+      matMask: job.scatter.matMask, rad: job.separation.rad * smax, ratio: job.separation.ratio,
     }, scales, (f) => onProgress?.('separate', f))
     : new Uint32Array(0);
   return { scales, forbid, ms: t1 - t0, sepMs: performance.now() - t1 };

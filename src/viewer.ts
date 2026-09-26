@@ -28,6 +28,7 @@ export class Viewer {
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
     this.renderer.setClearColor(0x000000, 0);
+    this.renderer.domElement.classList.add('gl');
     container.appendChild(this.renderer.domElement);
     this.scene.background = new THREE.Color(0x2a2d33);
     this.scene.add(new THREE.HemisphereLight(0xffffff, 0x404050, 1.4));
@@ -55,7 +56,11 @@ export class Viewer {
   private resize(): void {
     const w = this.container.clientWidth, h = this.container.clientHeight;
     if (w === 0 || h === 0) return;
-    this.renderer.setSize(w, h);
+    // 描画バッファだけを合わせ、canvas の表示寸法は CSS(100%)に任せる。
+    // setSize(w, h) で style に整数 px を書くと、器の端数が切り上がった分だけはみ出してちらつきの原因になる
+    const cur = this.renderer.getSize(new THREE.Vector2());
+    if (cur.x === w && cur.y === h) return;
+    this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
   }

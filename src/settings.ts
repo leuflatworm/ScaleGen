@@ -6,7 +6,7 @@ import { setSliderValue, sliderValue } from './numfield';
 const KEY = 'scalegen.settings.v1';
 
 // 保存する入力欄(id)
-const SLIDERS = ['size', 'overlap', 'sizeVar', 'bellyRange', 'briVar', 'hueVar', 'fleck', 'groove', 'normalStrength'];
+const SLIDERS = ['size', 'overlap', 'sizeVar', 'sizeBlack', 'bellyRange', 'briVar', 'hueVar', 'fleck', 'groove', 'normalStrength'];
 const SELECTS = ['baseDir', 'colorMode', 'res', 'bellyDir'];
 const CHECKS = ['flip', 'separate', 'belly', 'showFlow', 'gapClear', 'maskInvert'];
 const COLORS = ['tint', 'gap', 'bellyColor'];
