@@ -14,7 +14,10 @@
 </head>
 <body>
   <aside id="panel">
-    <h1>ScaleGen <small>鱗テクスチャジェネレーター(試作)</small></h1>
+    <div class="head">
+      <h1>ScaleGen <small>鱗テクスチャジェネレーター(試作)</small></h1>
+      <button id="resetBtn" class="small" title="すべての設定を最初の状態に戻します">設定をリセット</button>
+    </div>
 
     <section>
       <h2><span>1</span>モデル</h2>
@@ -40,6 +43,7 @@
         <label class="file small grow">高さ画像(任意)<input id="tileHFile" type="file" accept="image/png,image/jpeg,image/webp" /></label>
         <button id="tileHClear" hidden>外す</button>
       </div>
+      <div id="tileSaveNote" class="hint warn" hidden>画像が大きいため、次に開いたときには読み込まれません(ほかの設定は保存されます)</div>
       <div id="tileHInfo" class="hint">高さ画像なし(鱗の形から自動で膨らみを作ります)</div>
       <p class="hint">画像の下 = 付け根、上 = 先端(次の鱗に重なる側)</p>
     </section>

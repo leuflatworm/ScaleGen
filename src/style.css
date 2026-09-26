@@ -99,3 +99,6 @@ details summary { cursor: pointer; color: var(--muted); margin: 6px 0; }
 .pbar { height: 8px; border-radius: 4px; background: #3a3e45; overflow: hidden; }
 #progressFill { height: 100%; width: 0; background: var(--accent); transition: width 0.15s linear; }
 .pbottom { margin-top: 8px; }
+.head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+button.small { font-size: 11px; padding: 3px 7px; flex: none; margin-top: 2px; }
+#tileSaveNote[hidden] { display: none; }

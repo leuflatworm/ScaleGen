@@ -15,6 +15,10 @@ import { placementStats, verify, verifyScaleColors } from './verify';
 import { loadSourceImage, scaleColorsFromSources, type SourceImage } from './core/colorsource';
 import { checkSupport } from './support';
 import { attachNumberFields, sliderValue } from './numfield';
+import {
+  applyControls, clearSettings, collectControls, dataURLToFile, fileToDataURL, loadSettings, MAX_IMAGE_CHARS, saveSettings,
+  type ImageSetting, type TileSetting,
+} from './settings';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 // スライダーの値は数値欄から読む(スライダーの範囲を超えた値も入れられる)
@@ -45,6 +49,8 @@ const state = {
   flow: null as Float32Array | null,
   matMask: [] as boolean[],
   tile: makePresetTile('skink'),
+  tileSource: { kind: 'preset', id: 'skink' } as TileSetting,    // 設定の保存用: 鱗の形の出どころ
+  tileHSource: null as ImageSetting | null,
   tileTex: null as THREE.Texture | null,
   tileHTex: null as THREE.Texture | null,         // 鱗の高さ画像(任意)
   seed: 1,
@@ -134,8 +140,9 @@ $('modelFile').addEventListener('change', async (e) => {
 $('unit').addEventListener('change', rebuildSurface);
 
 // ---------- 2. 鱗の形 ----------
-function setTile(t: TileImage): void {
+function setTile(t: TileImage, source: TileSetting): void {
   state.tile = t;
+  state.tileSource = source;
   state.tileTex?.dispose();
   const tex = new THREE.CanvasTexture(t.canvas);
   tex.colorSpace = THREE.NoColorSpace;
@@ -156,16 +163,19 @@ for (const p of TILE_PRESETS) {
   cv.width = cv.height = 64;
   cv.getContext('2d')!.drawImage(t.canvas, 0, 0, 64, 64);
   b.append(cv, p.name);
-  b.addEventListener('click', () => setTile(makePresetTile(p.id)));
+  b.addEventListener('click', () => { setTile(makePresetTile(p.id), { kind: 'preset', id: p.id }); persist(); });
   $('tilePresets').appendChild(b);
 }
 $('tileFile').addEventListener('change', async (e) => {
   const f = (e.target as HTMLInputElement).files?.[0];
-  if (f) setTile(await loadTileFile(f));
+  if (!f) return;
+  setTile(await loadTileFile(f), { kind: 'image', name: f.name, data: await fileToDataURL(f) });
+  persist();
 });
 
 // 高さ画像: 鱗の形の画像と同じ配置のグレースケール(白 = 高い)。敷き詰めに効くので生成済みなら作り直す
-function setTileHeight(canvas: HTMLCanvasElement | null, name: string): void {
+function setTileHeight(canvas: HTMLCanvasElement | null, name: string, source: ImageSetting | null = null): void {
+  state.tileHSource = canvas ? source : null;
   state.tileHTex?.dispose();
   state.tileHTex = null;
   if (canvas) {
@@ -180,22 +190,27 @@ function setTileHeight(canvas: HTMLCanvasElement | null, name: string): void {
   $('tileHInfo').textContent = canvas ? `高さ画像: ${name}` : '高さ画像なし(鱗の形から自動で膨らみを作ります)';
   $('tileHClear').hidden = !canvas;
 }
-$('tileHFile').addEventListener('change', async (e) => {
-  const f = (e.target as HTMLInputElement).files?.[0];
-  if (!f) return;
+async function loadTileHeightFile(f: File): Promise<void> {
   const bmp = await createImageBitmap(f, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
   const cv = document.createElement('canvas');
   cv.width = bmp.width; cv.height = bmp.height;
   cv.getContext('2d')!.drawImage(bmp, 0, 0);
   bmp.close();
-  setTileHeight(cv, f.name);
+  setTileHeight(cv, f.name, { name: f.name, data: await fileToDataURL(f) });
+}
+$('tileHFile').addEventListener('change', async (e) => {
+  const f = (e.target as HTMLInputElement).files?.[0];
+  if (!f) return;
+  await loadTileHeightFile(f);
+  persist();
   if (state.results.size > 0) generate();
 });
 $('tileHClear').addEventListener('click', () => {
   setTileHeight(null, '');
+  persist();
   if (state.results.size > 0) generate();
 });
-setTile(state.tile);
+setTile(state.tile, state.tileSource);
 
 // ---------- 3. 流れ ----------
 function baseDir(): Vec3 {
@@ -482,9 +497,10 @@ async function generate(): Promise<void> {
       }, ac.signal);
       state.timings[`tile_${s.materials[mi]}`] = performance.now() - t0;
       state.results.set(mi, r);
-      // 着色と読み戻し(大きい解像度では 1 秒ほどかかる)。表示を更新してから始める
+      // 着色と読み戻し(大きい解像度では 1 秒ほどかかる)。表示を更新してから始める。
+      // ⚠ requestAnimationFrame で待たない: 別のタブを見ている間は止まり、生成がそこで止まってしまう
       setProgress(placeFrac + (1 - placeFrac) * ((k + 0.95) / mats.length), `仕上げ中(${s.materials[mi]})…`);
-      await new Promise((ok) => requestAnimationFrame(() => setTimeout(ok, 0)));
+      await new Promise((ok) => setTimeout(ok, 20));
       if (ac.signal.aborted) throw abortError();
       const o = gen.shade(r, shadeParams(), state.sourceTex.get(mi) ?? null);
       state.shaded.set(mi, o);
@@ -520,7 +536,7 @@ async function generate(): Promise<void> {
   }
 }
 $('genBtn').addEventListener('click', generate);
-$('reseed').addEventListener('click', () => { state.seed++; generate(); });
+$('reseed').addEventListener('click', () => { state.seed++; persist(); generate(); });
 $('cancelBtn').addEventListener('click', () => {
   if (!running) return;
   running.abort();
@@ -574,6 +590,67 @@ function safeName(s: string): string { return s.replace(/[\\/:*?"<>|\s]+/g, '_')
 function escapeHtml(s: string): string { return s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`); }
 
 // ---------- 開発用(検証・自動テスト) ----------
+// ---------- 設定の保存と読み込み ----------
+// 画面の既定値(HTML に書いた値)。リセットで戻す先
+const DEFAULT_CONTROLS = collectControls();
+let restoring = false;
+let persistTimer = 0;
+function persist(): void {
+  if (restoring) return;
+  clearTimeout(persistTimer);
+  persistTimer = window.setTimeout(() => {
+    const img = (x: ImageSetting | null) => (x && x.data.length <= MAX_IMAGE_CHARS ? x : null);
+    const tile = state.tileSource.kind === 'image' ? img(state.tileSource) && state.tileSource : state.tileSource;
+    const tooBig = (state.tileSource.kind === 'image' && !tile) || (state.tileHSource && !img(state.tileHSource));
+    $('tileSaveNote').hidden = !tooBig;
+    saveSettings({ controls: collectControls(), tile: tile || undefined, tileHeight: img(state.tileHSource), seed: state.seed });
+  }, 300);
+}
+// パネルの入力が変わるたびに保存する(マテリアルの選択など、保存しない項目の変更でも保存し直すだけで害は無い)
+$('panel').addEventListener('input', persist);
+$('panel').addEventListener('change', persist);
+
+async function restoreSettings(): Promise<void> {
+  const saved = loadSettings();
+  if (!saved) return;
+  restoring = true;
+  try {
+    applyControls(saved.controls);
+    if (typeof saved.seed === 'number' && Number.isFinite(saved.seed)) state.seed = saved.seed;
+    const t = saved.tile;
+    if (t?.kind === 'preset' && TILE_PRESETS.some((p) => p.id === t.id)) {
+      setTile(makePresetTile(t.id), t);
+    } else if (t?.kind === 'image') {
+      setTile(await loadTileFile(await dataURLToFile(t.data, t.name)), t);
+    }
+    // 高さ画像は鱗の形のあとに入れる(形を入れると高さ画像は外れるため)
+    if (saved.tileHeight) await loadTileHeightFile(await dataURLToFile(saved.tileHeight.data, saved.tileHeight.name));
+  } catch (err) {
+    console.warn('前回の設定を読み込めませんでした', err);
+  } finally {
+    restoring = false;
+  }
+}
+const restored = restoreSettings();
+
+$('resetBtn').addEventListener('click', async () => {
+  if (!window.confirm('すべての設定を最初の状態に戻しますか?(読み込んだモデルと生成結果はそのままです)')) return;
+  await restored;
+  restoring = true;
+  try {
+    applyControls(DEFAULT_CONTROLS);
+    setTile(makePresetTile('skink'), { kind: 'preset', id: 'skink' });
+    setTileHeight(null, '');
+    state.seed = 1;
+  } finally {
+    restoring = false;
+  }
+  clearTimeout(persistTimer);
+  clearSettings();
+  $('tileSaveNote').hidden = true;
+  setStatus('設定を最初の状態に戻しました。');
+});
+
 if (import.meta.env.DEV) {
   const api = {
     state,

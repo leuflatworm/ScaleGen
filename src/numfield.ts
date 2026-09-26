@@ -52,6 +52,14 @@ export function attachNumberFields(root: ParentNode = document): void {
   });
 }
 
+// 値を入れる(数値欄の範囲に丸め、スライダーの 'input' イベントを出す)
+export function setSliderValue(id: string, v: number): void {
+  const f = fields.get(id);
+  if (!f) return;
+  f.value = String(v);
+  f.dispatchEvent(new Event('change'));
+}
+
 // 値を読む(数値欄があればそちら。スライダー範囲外の値もそのまま返す)
 export function sliderValue(id: string): number {
   const f = fields.get(id);
