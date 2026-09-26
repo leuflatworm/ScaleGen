@@ -34,10 +34,16 @@ h2 span {
 }
 .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0; }
 .row label { color: var(--muted); }
-.slider { display: grid; grid-template-columns: 1fr 52px; gap: 0 6px; margin: 6px 0; }
+.slider { display: grid; grid-template-columns: 1fr auto; gap: 0 8px; margin: 6px 0; align-items: center; }
 .slider label { grid-column: 1 / 3; color: var(--muted); }
-.slider input { width: 100%; accent-color: var(--accent); }
-.slider output { text-align: right; font-variant-numeric: tabular-nums; }
+.slider input[type=range] { width: 100%; accent-color: var(--accent); }
+.numwrap { display: flex; align-items: center; gap: 3px; }
+.num {
+  width: 64px; background: #30343a; color: var(--text); border: 1px solid var(--line); border-radius: 4px;
+  padding: 2px 4px; font: inherit; text-align: right; font-variant-numeric: tabular-nums;
+}
+.num:focus { outline: 1px solid var(--accent); }
+.unit { color: var(--muted); font-size: 11px; }
 select, button, input[type=color] {
   background: #30343a; color: var(--text); border: 1px solid var(--line); border-radius: 4px;
   padding: 4px 8px; font: inherit;
@@ -81,3 +87,15 @@ details summary { cursor: pointer; color: var(--muted); margin: 6px 0; }
   white-space: pre-line; line-height: 1.7;
 }
 .about a { color: var(--accent); }
+#progress {
+  position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%);
+  width: min(460px, calc(100% - 32px)); padding: 10px 14px; border-radius: 8px;
+  background: rgba(37, 40, 45, 0.94); border: 1px solid var(--line); box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+#progress[hidden] { display: none; }
+.ptop, .pbottom { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.ptop { margin-bottom: 6px; }
+#progressPct, #progressTime { color: var(--muted); font-variant-numeric: tabular-nums; }
+.pbar { height: 8px; border-radius: 4px; background: #3a3e45; overflow: hidden; }
+#progressFill { height: 100%; width: 0; background: var(--accent); transition: width 0.15s linear; }
+.pbottom { margin-top: 8px; }

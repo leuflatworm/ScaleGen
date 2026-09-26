@@ -24,7 +24,7 @@ export interface SeparationInput {
 }
 
 // 戻り値: [三角形, 鱗, 三角形, 鱗, ...] の禁止ペア
-export function computeSeparation(inp: SeparationInput, sc: Scales): Uint32Array {
+export function computeSeparation(inp: SeparationInput, sc: Scales, onProgress?: (f: number) => void): Uint32Array {
   const P = inp.positions, T = inp.tris;
   const nv = P.length / 3, nt = T.length / 3;
 
@@ -88,7 +88,9 @@ export function computeSeparation(inp: SeparationInput, sc: Scales): Uint32Array
   const target = new Int32Array(nv).fill(-1);   // 判定に要る頂点(候補三角形の角)の印
   const out: number[] = [];
 
+  const every = Math.max(1, Math.floor(sc.count / 50));
   for (let s = 0; s < sc.count; s++) {
+    if (s % every === 0) onProgress?.(s / sc.count);
     const sx = sc.pos[s * 3], sy = sc.pos[s * 3 + 1], sz = sc.pos[s * 3 + 2];
     const ts = sc.tri[s];
     const c0 = T[ts * 3], c1 = T[ts * 3 + 1], c2 = T[ts * 3 + 2];

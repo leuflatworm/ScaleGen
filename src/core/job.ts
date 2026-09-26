@@ -1,5 +1,5 @@
 // 鱗の配置 + 部位の分離判定をまとめた処理。Worker からもメインスレッド(Worker が使えない環境)からも呼ぶ
-import { scatterScales, type Scales, type ScatterInput } from './scatter';
+import { scatterScales, type Progress, type Scales, type ScatterInput } from './scatter';
 import { computeSeparation } from './separation';
 
 export interface ScatterJob {
@@ -14,15 +14,15 @@ export interface ScatterResult {
   sepMs: number;           // 分離判定にかかった時間
 }
 
-export function runScatterJob(job: ScatterJob): ScatterResult {
+export function runScatterJob(job: ScatterJob, onProgress?: Progress): ScatterResult {
   const t0 = performance.now();
-  const scales = scatterScales(job.scatter);
+  const scales = scatterScales(job.scatter, onProgress);
   const t1 = performance.now();
   const forbid = job.separation
     ? computeSeparation({
       positions: job.scatter.positions, tris: job.scatter.tris, triMat: job.scatter.triMat,
       matMask: job.scatter.matMask, rad: job.separation.rad, ratio: job.separation.ratio,
-    }, scales)
+    }, scales, (f) => onProgress?.('separate', f))
     : new Uint32Array(0);
   return { scales, forbid, ms: t1 - t0, sepMs: performance.now() - t1 };
 }

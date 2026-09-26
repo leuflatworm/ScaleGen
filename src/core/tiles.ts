@@ -18,7 +18,7 @@ const smooth = (a: number, b: number, x: number) => {
 const PRESETS: { id: string; name: string; aspect: number; fn: Shader }[] = [
   {
     // Houdini の tile_test と同じ形: 下がすぼまり上(後縁)が丸い
-    id: 'skink', name: '丸瓦(トカゲ)', aspect: 5.5 / 5.95,
+    id: 'skink', name: '丸瓦', aspect: 5.5 / 5.95,
     fn: (x, y) => {
       const w = 0.92 * (0.55 + 0.45 * smooth(-1, 0.7, y));
       const d = Math.hypot(x / w, y / 0.95);
@@ -30,7 +30,7 @@ const PRESETS: { id: string; name: string; aspect: number; fn: Shader }[] = [
   },
   {
     // ヘビのような菱形。中央に稜(キール)
-    id: 'snake', name: '菱形(ヘビ)', aspect: 0.8,
+    id: 'snake', name: '菱形', aspect: 0.8,
     fn: (x, y) => {
       const d = Math.abs(x) / 0.92 + Math.abs(y - 0.05) / 0.95;
       const a = 1 - smooth(0.82, 1, d);
@@ -41,7 +41,7 @@ const PRESETS: { id: string; name: string; aspect: number; fn: Shader }[] = [
   },
   {
     // 魚のような丸い鱗。後縁に向かって明るく
-    id: 'fish', name: '円鱗(魚)', aspect: 1.0,
+    id: 'fish', name: '円鱗', aspect: 1.0,
     fn: (x, y) => {
       const d = Math.hypot(x, y) / 0.96;
       const a = 1 - smooth(0.9, 1, d);

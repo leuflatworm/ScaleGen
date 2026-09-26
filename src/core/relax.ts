@@ -22,7 +22,9 @@ const GAIN = 0.5;
 const REACH = 1.4;
 
 // pos / tri / bar(三角形の 2 番目・3 番目の角の重み)をその場で更新する
-export function relaxOnSurface(inp: RelaxInput, n: number, pos: Float32Array, tri: Uint32Array, bar: Float32Array): void {
+export function relaxOnSurface(
+  inp: RelaxInput, n: number, pos: Float32Array, tri: Uint32Array, bar: Float32Array, onProgress?: (f: number) => void,
+): void {
   const P = inp.positions, T = inp.tris;
   const nt = T.length / 3;
   const adj = triangleAdjacency(T, nt);
@@ -78,6 +80,7 @@ export function relaxOnSurface(inp: RelaxInput, n: number, pos: Float32Array, tr
   buildList();
 
   for (let it = 0; it < inp.iterations; it++) {
+    onProgress?.(it / inp.iterations);
     // --- 反発力(ヤコビ法: 全点の力を出してから動かす) ---
     for (let i = 0; i < n; i++) {
       const x = pos[i * 3], y = pos[i * 3 + 1], z = pos[i * 3 + 2];

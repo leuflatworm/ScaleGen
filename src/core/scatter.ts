@@ -46,7 +46,10 @@ export function mulberry32(seed: number): () => number {
   };
 }
 
-export function scatterScales(inp: ScatterInput): Scales {
+// 進み具合の報告: 段階名と、その段階の中での割合 0〜1
+export type Progress = (stage: 'eliminate' | 'relax' | 'separate', f: number) => void;
+
+export function scatterScales(inp: ScatterInput, onProgress?: Progress): Scales {
   const { positions: P, tris, triMat } = inp;
   const rng = mulberry32(inp.seed * 7919 + 17);
 
@@ -86,7 +89,7 @@ export function scatterScales(inp: ScatterInput): Scales {
     ctri[i] = t; cbar[i * 2] = u; cbar[i * 2 + 1] = v;
   }
 
-  const keep = eliminate(cpos, M, N, area);
+  const keep = eliminate(cpos, M, N, area, (f) => onProgress?.('eliminate', f));
 
   // --- 面の上で押し広げる ---
   const n = keep.length;
@@ -99,7 +102,7 @@ export function scatterScales(inp: ScatterInput): Scales {
   relaxOnSurface({
     positions: P, tris, triMat, matMask: inp.matMask, spacing: Math.sqrt(area / n),
     iterations: inp.relaxIterations ?? RELAX_ITERATIONS,
-  }, n, kpos, ktri, kbar);
+  }, n, kpos, ktri, kbar, (f) => onProgress?.('relax', f));
 
   // --- 1 枚ごとの属性 ---
   const pos = new Float32Array(n * 3), nrm = new Float32Array(n * 3);
@@ -139,7 +142,7 @@ export function scatterScales(inp: ScatterInput): Scales {
 }
 
 // Yuksel, "Sample Elimination for Generating Poisson Disk Sample Sets" (2015)
-function eliminate(cpos: Float32Array, M: number, N: number, area: number): Uint32Array {
+function eliminate(cpos: Float32Array, M: number, N: number, area: number, onProgress?: (f: number) => void): Uint32Array {
   const rmax = Math.sqrt(area / (2 * Math.sqrt(3) * N));
   const r2 = 2 * rmax;
   const rmin = rmax * (1 - Math.pow(N / M, 1.5)) * 0.65;
@@ -191,7 +194,9 @@ function eliminate(cpos: Float32Array, M: number, N: number, area: number): Uint
   };
 
   const W = new Float64Array(M);
+  const everyW = Math.max(1, Math.floor(M / 50));
   for (let i = 0; i < M; i++) {
+    if (i % everyW === 0) onProgress?.(0.4 * (i / M));
     const n = gather(i);
     let s = 0;
     for (let k = 0; k < n; k++) s += wfun(nd2[k]);
@@ -218,7 +223,10 @@ function eliminate(cpos: Float32Array, M: number, N: number, area: number): Uint
   for (let k = (hn >> 1) - 1; k >= 0; k--) down(k);
 
   const alive = new Uint8Array(M).fill(1);
+  const toRemove = M - N;
+  const every = Math.max(1, Math.floor(toRemove / 50));
   while (hn > N) {
+    if ((M - hn) % every === 0) onProgress?.(0.4 + 0.6 * ((M - hn) / toRemove));
     const i = heap[0];
     hn--;
     heap[0] = heap[hn]; hpos[heap[0]] = 0;

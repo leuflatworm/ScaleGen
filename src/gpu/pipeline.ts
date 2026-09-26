@@ -139,87 +139,113 @@ export class Generator {
   // 1 マテリアル分: 焼き込み → パディング → 敷き詰め
   async runMaterial(
     s: Surface, matIndex: number, res: number, spacing: number, tile: THREE.Texture, tileH: THREE.Texture | null,
-    onProgress?: (f: number) => void,
+    onProgress?: (f: number) => void, signal?: AbortSignal,
   ): Promise<MaterialResult> {
     if (!this.grid || !this.tp) throw new Error('setScales が先');
     const r = this.renderer;
     r.setClearColor(0x000000, 0);
 
-    // --- 焼き込み ---
-    // 1 番の w に三角形の番号を入れるので 32bit
-    const bake = mrt(res, [THREE.FloatType, THREE.FloatType, THREE.HalfFloatType, THREE.HalfFloatType]);
-    const geo = bakeGeometry(s, matIndex);
-    const bmat = new THREE.RawShaderMaterial({
-      vertexShader: BAKE_VS, fragmentShader: BAKE_FS, glslVersion: THREE.GLSL3,
-      side: THREE.DoubleSide, depthTest: false, depthWrite: false,
-    });
-    const bmesh = new THREE.Mesh(geo, bmat);
-    bmesh.frustumCulled = false;
-    const bscene = new THREE.Scene();
-    bscene.add(bmesh);
-    r.setRenderTarget(bake);
-    r.render(bscene, this.camera);
-    r.setRenderTarget(null);
-    geo.dispose(); bmat.dispose();
+    // 各段階のあとで GPU の完了を待ち、進み具合を報告し、中止を受け付ける。
+    // 待つのはフェンス(GPU が終わったかの印)を画面を止めずに見る形なので、待っている間も「中止」を押せる。
+    // 描画命令は積むだけで先に進むので、待たないと進み具合が実際より先に進み、中止しても積んだ分が走り続ける。
+    // 割合は 4096px の実測に合わせた目安: 焼き込み 5% / パディング(JFA) 55% / 外挿 5% / 敷き詰め 35%
+    const owned: THREE.WebGLRenderTarget[] = [];
+    const checkpoint = async (f: number) => {
+      await waitGPU(r.getContext() as WebGL2RenderingContext);
+      onProgress?.(f);
+      if (signal?.aborted) throw new DOMException('中止しました', 'AbortError');
+    };
+    try {
+      // --- 焼き込み ---
+      // 1 番の w に三角形の番号を入れるので 32bit
+      const bake = mrt(res, [THREE.FloatType, THREE.FloatType, THREE.HalfFloatType, THREE.HalfFloatType]);
+      owned.push(bake);
+      const geo = bakeGeometry(s, matIndex);
+      const bmat = new THREE.RawShaderMaterial({
+        vertexShader: BAKE_VS, fragmentShader: BAKE_FS, glslVersion: THREE.GLSL3,
+        side: THREE.DoubleSide, depthTest: false, depthWrite: false,
+      });
+      const bmesh = new THREE.Mesh(geo, bmat);
+      bmesh.frustumCulled = false;
+      const bscene = new THREE.Scene();
+      bscene.add(bmesh);
+      r.setRenderTarget(bake);
+      r.render(bscene, this.camera);
+      r.setRenderTarget(null);
+      geo.dispose(); bmat.dispose();
+      await checkpoint(0.05);
 
-    // --- JFA ---
-    let seedA = rt1(res, THREE.FloatType), seedB = rt1(res, THREE.FloatType);
-    this.draw(this.pass(JFA_INIT_FS, { tPos: { value: bake.textures[0] } }), seedA);
-    const stepPass = this.pass(JFA_STEP_FS, { tSeed: { value: null }, uStep: { value: 1 }, uRes: { value: res } });
-    for (let st = res >> 1; st >= 1; st >>= 1) {
-      stepPass.mat.uniforms.tSeed.value = seedA.texture;
-      stepPass.mat.uniforms.uStep.value = st;
-      this.draw(stepPass, seedB, false);
-      [seedA, seedB] = [seedB, seedA];
-    }
-    stepPass.mat.dispose();
-
-    const pad = mrt(res, [THREE.FloatType, THREE.HalfFloatType, THREE.FloatType]);
-    this.draw(this.pass(PAD_FS, {
-      tPos: { value: bake.textures[0] }, tNrm: { value: bake.textures[1] },
-      tDu: { value: bake.textures[2] }, tDv: { value: bake.textures[3] },
-      tSeed: { value: seedA.texture }, uRes: { value: res }, uPadMax: { value: Math.max(8, res / 32) },
-    }), pad);
-    bake.dispose(); seedA.dispose(); seedB.dispose();
-
-    // --- 敷き詰め(GPU のタイムアウトを避けるためブロックに分ける) ---
-    const g = this.grid, tp = this.tp;
-    // 2 番(中心 + 鱗の番号)は番号を正確に持つため 32bit
-    const tiled = mrt(res, [THREE.HalfFloatType, THREE.FloatType, THREE.FloatType]);
-    const tpass = this.pass(TILER_FS, {
-      tPos: { value: pad.textures[0] }, tNrm: { value: pad.textures[1] },
-      tTable: { value: g.table }, tS0: { value: g.s[0] }, tS1: { value: g.s[1] }, tS2: { value: g.s[2] }, tS3: { value: g.s[3] },
-      tTri: { value: pad.textures[2] }, tForbid: { value: g.forbid }, uForbidW: { value: g.forbidW },
-      uForbidMask: { value: g.forbidMask }, uUseForbid: { value: g.forbidCount > 0 ? 1 : 0 },
-      tTile: { value: tile }, tTileH: { value: tileH }, uHasTileH: { value: tileH ? 1 : 0 },
-      uTableW: { value: g.tableW }, uScaleW: { value: g.scaleW }, uTableMask: { value: g.mask },
-      uOrigin: { value: g.origin }, uCell: { value: g.cell }, uRad: { value: g.rad },
-      uTileHalf: { value: new THREE.Vector2(tp.tileW * 0.5, tp.tileH * 0.5) },
-      uTileTexW: { value: (tile.image as { width: number }).width },
-      uSgn: { value: tp.flip ? -1 : 1 }, uHPow: { value: tp.heightDome }, uVaria: { value: tp.sizeVar },
-      uMaxLayers: { value: tp.maxLayers },
-    });
-    const B = 512;
-    const blocks = Math.ceil(res / B) ** 2;
-    let done = 0;
-    tiled.scissorTest = true;
-    for (let y = 0; y < res; y += B) {
-      for (let x = 0; x < res; x += B) {
-        tiled.scissor.set(x, y, Math.min(B, res - x), Math.min(B, res - y));
-        this.draw(tpass, tiled, false);
-        done++;
-        if (done % 4 === 0) {
-          r.getContext().flush();
-          onProgress?.(done / blocks);
-          await new Promise((ok) => setTimeout(ok, 0));
+      // --- JFA(種の画素座標だけを持つので 2 チャンネル) ---
+      let seedA = rt1(res, THREE.FloatType, THREE.RGFormat), seedB = rt1(res, THREE.FloatType, THREE.RGFormat);
+      owned.push(seedA, seedB);
+      this.draw(this.pass(JFA_INIT_FS, { tPos: { value: bake.textures[0] } }), seedA);
+      const stepPass = this.pass(JFA_STEP_FS, { tSeed: { value: null }, uStep: { value: 1 }, uRes: { value: res } });
+      const passes = Math.log2(res);
+      let pi = 0;
+      try {
+        for (let st = res >> 1; st >= 1; st >>= 1) {
+          stepPass.mat.uniforms.tSeed.value = seedA.texture;
+          stepPass.mat.uniforms.uStep.value = st;
+          this.draw(stepPass, seedB, false);
+          [seedA, seedB] = [seedB, seedA];
+          if (++pi % 2 === 0) await checkpoint(0.05 + 0.55 * (pi / passes));
         }
+      } finally {
+        stepPass.mat.dispose();
       }
+
+      const pad = mrt(res, [THREE.FloatType, THREE.HalfFloatType, THREE.FloatType]);
+      owned.push(pad);
+      this.draw(this.pass(PAD_FS, {
+        tPos: { value: bake.textures[0] }, tNrm: { value: bake.textures[1] },
+        tDu: { value: bake.textures[2] }, tDv: { value: bake.textures[3] },
+        tSeed: { value: seedA.texture }, uRes: { value: res }, uPadMax: { value: Math.max(8, res / 32) },
+      }), pad);
+      await checkpoint(0.65);
+      bake.dispose(); seedA.dispose(); seedB.dispose();
+      owned.length = 0;
+      owned.push(pad);
+
+      // --- 敷き詰め(GPU のタイムアウトを避けるためブロックに分ける) ---
+      const g = this.grid, tp = this.tp;
+      // 2 番(中心 + 鱗の番号)は番号を正確に持つため 32bit
+      const tiled = mrt(res, [THREE.HalfFloatType, THREE.FloatType, THREE.FloatType]);
+      owned.push(tiled);
+      const tpass = this.pass(TILER_FS, {
+        tPos: { value: pad.textures[0] }, tNrm: { value: pad.textures[1] },
+        tTable: { value: g.table }, tS0: { value: g.s[0] }, tS1: { value: g.s[1] }, tS2: { value: g.s[2] }, tS3: { value: g.s[3] },
+        tTri: { value: pad.textures[2] }, tForbid: { value: g.forbid }, uForbidW: { value: g.forbidW },
+        uForbidMask: { value: g.forbidMask }, uUseForbid: { value: g.forbidCount > 0 ? 1 : 0 },
+        tTile: { value: tile }, tTileH: { value: tileH }, uHasTileH: { value: tileH ? 1 : 0 },
+        uTableW: { value: g.tableW }, uScaleW: { value: g.scaleW }, uTableMask: { value: g.mask },
+        uOrigin: { value: g.origin }, uCell: { value: g.cell }, uRad: { value: g.rad },
+        uTileHalf: { value: new THREE.Vector2(tp.tileW * 0.5, tp.tileH * 0.5) },
+        uTileTexW: { value: (tile.image as { width: number }).width },
+        uSgn: { value: tp.flip ? -1 : 1 }, uHPow: { value: tp.heightDome }, uVaria: { value: tp.sizeVar },
+        uMaxLayers: { value: tp.maxLayers },
+      });
+      const B = 512;
+      const blocks = Math.ceil(res / B) ** 2;
+      let done = 0;
+      tiled.scissorTest = true;
+      try {
+        for (let y = 0; y < res; y += B) {
+          for (let x = 0; x < res; x += B) {
+            tiled.scissor.set(x, y, Math.min(B, res - x), Math.min(B, res - y));
+            this.draw(tpass, tiled, false);
+            done++;
+            if (done % 4 === 0 || done === blocks) await checkpoint(0.65 + 0.35 * (done / blocks));
+          }
+        }
+      } finally {
+        tiled.scissorTest = false;
+        tpass.mat.dispose();
+      }
+      return { res, pad, tiled, spacing };
+    } catch (e) {
+      owned.forEach((t) => t.dispose());
+      throw e;
     }
-    tiled.scissorTest = false;
-    tpass.mat.dispose();
-    // 読み戻して GPU の完了を待つ(計測値を正しくするため)
-    r.readRenderTargetPixels(tiled, 0, 0, 1, 1, new Float32Array(4), undefined, 1);
-    return { res, pad, tiled, spacing };
   }
 
   // 鱗ごとの色を設定する。cols は元の鱗番号順の RGBA(a = 1 なら色あり)
@@ -312,6 +338,19 @@ function forbidTable(forbid: Uint32Array, order: Uint32Array, count: number) {
   return { forbid: dataTex(data, w, h, THREE.RGFormat), forbidW: w, forbidMask: mask, forbidCount: n };
 }
 
+// GPU が積まれた命令を終えるまで、画面を止めずに待つ(WebGL2 のフェンス)
+async function waitGPU(gl: WebGL2RenderingContext): Promise<void> {
+  const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+  if (!sync) return;
+  gl.flush();
+  for (;;) {
+    const st = gl.clientWaitSync(sync, 0, 0);
+    if (st === gl.ALREADY_SIGNALED || st === gl.CONDITION_SATISFIED || st === gl.WAIT_FAILED) break;
+    await new Promise((ok) => setTimeout(ok, 4));
+  }
+  gl.deleteSync(sync);
+}
+
 function dataTex(data: Float32Array, w: number, h: number, format: THREE.PixelFormat): THREE.DataTexture {
   const t = new THREE.DataTexture(data, w, h, format, THREE.FloatType);
   t.minFilter = t.magFilter = THREE.NearestFilter;
@@ -320,9 +359,9 @@ function dataTex(data: Float32Array, w: number, h: number, format: THREE.PixelFo
   return t;
 }
 
-function rt1(res: number, type: THREE.TextureDataType): THREE.WebGLRenderTarget {
+function rt1(res: number, type: THREE.TextureDataType, format: THREE.PixelFormat = THREE.RGBAFormat): THREE.WebGLRenderTarget {
   return new THREE.WebGLRenderTarget(res, res, {
-    type, format: THREE.RGBAFormat, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+    type, format, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
     depthBuffer: false, generateMipmaps: false,
   });
 }

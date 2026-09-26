@@ -6,6 +6,7 @@ import { buildSurface, surfaceArea, uvArea, type Surface } from './core/surface'
 import { computeVertexFlow, type Vec3 } from './core/flow';
 import type { Scales } from './core/scatter';
 import { runScatterJob, type ScatterJob, type ScatterResult } from './core/job';
+import type { Progress } from './core/scatter';
 import { TILE_PRESETS, loadTileFile, makePresetTile, tileSize, type TileImage } from './core/tiles';
 import { Generator, type TileParams, type MaterialResult, type ShadeOutput, type ShadeParams } from './gpu/pipeline';
 import { Viewer } from './viewer';
@@ -13,9 +14,12 @@ import { downloadZip, flipRowsRGBA8, png8, pngHeight16 } from './export';
 import { placementStats, verify, verifyScaleColors } from './verify';
 import { loadSourceImage, scaleColorsFromSources, type SourceImage } from './core/colorsource';
 import { checkSupport } from './support';
+import { attachNumberFields, sliderValue } from './numfield';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
-const num = (id: string) => Number($<HTMLInputElement>(id).value);
+// スライダーの値は数値欄から読む(スライダーの範囲を超えた値も入れられる)
+attachNumberFields();
+const num = (id: string) => sliderValue(id);
 
 // 動かない環境では、何が足りないかを表示してここで止める
 const unsupported = checkSupport();
@@ -217,7 +221,6 @@ $('showFlow').addEventListener('change', (e) => viewer.setFlowVisible((e.target 
 // ---------- 4. 大きさ ----------
 function spacing(): number { return num('size') * 0.001; }
 function updateCount(): void {
-  $('sizeOut').textContent = `${num('size').toFixed(1)} mm`;
   if (!state.surface) { $('countInfo').textContent = ''; return; }
   const a = surfaceArea(state.surface, state.matMask);
   const n = Math.round(a / spacing() ** 2);
@@ -337,20 +340,15 @@ function applyScaleColors(): void {
   gen.setScaleColors(scaleColorsFromSources(state.scales, state.sources));
 }
 
-// スライダーの値表示
-document.querySelectorAll<HTMLInputElement>('.slider input').forEach((inp) => {
-  const out = inp.parentElement!.querySelector('output');
-  if (!out || inp.id === 'size') return;
-  const upd = () => { out.textContent = Number(inp.value).toFixed(2); };
-  inp.addEventListener('input', upd);
-  upd();
-});
-
 // ---------- 6. 生成 ----------
-// 鱗の配置は Worker で回す。Worker が起動できない環境(スクリプトが読めない等)では
-// 画面が一時止まるのを承知でメインスレッドで実行する
-function runScatter(inp: ScatterJob): Promise<ScatterResult> {
-  const direct = () => runScatterJob(inp);
+const abortError = () => new DOMException('中止しました', 'AbortError');
+const isAbort = (e: unknown) => e instanceof DOMException && e.name === 'AbortError';
+
+// 鱗の配置は Worker で回す。中止は Worker ごと止める。
+// Worker が起動できない環境(スクリプトが読めない等)では、画面が一時止まるのを承知でメインスレッドで実行する
+// (この場合は途中で中止できない)
+function runScatter(inp: ScatterJob, signal: AbortSignal, onProgress: Progress): Promise<ScatterResult> {
+  const direct = () => runScatterJob(inp, onProgress);
   return new Promise((ok, ng) => {
     let w: Worker;
     try {
@@ -360,15 +358,55 @@ function runScatter(inp: ScatterJob): Promise<ScatterResult> {
       try { ok(direct()); } catch (e2) { ng(e2); }
       return;
     }
-    w.onmessage = (e) => { ok(e.data); w.terminate(); };
+    const onAbort = () => { w.terminate(); ng(abortError()); };
+    signal.addEventListener('abort', onAbort, { once: true });
+    w.onmessage = (e) => {
+      if (e.data.type === 'progress') { onProgress(e.data.stage, e.data.f); return; }
+      signal.removeEventListener('abort', onAbort);
+      w.terminate();
+      ok(e.data.result);
+    };
     w.onerror = (e) => {
       e.preventDefault();
+      signal.removeEventListener('abort', onAbort);
       w.terminate();
       console.warn('Worker でエラーが出たためメインスレッドで配置します', e.message || e);
       try { ok(direct()); } catch (e2) { ng(e2); }
     };
     w.postMessage(inp);
   });
+}
+
+// ---- 進み具合の表示(3D ビューの下に出す。パネルをスクロールしていても見える) ----
+// 全体を 1 本のバーにする。配置とテクスチャの取り分は、見込み時間の比で決める
+// (実測 Akyo: 配置 ≈ 枚数 × 70µs、テクスチャ ≈ 1 秒 × (解像度/2048)² × マテリアル数)。
+// 配置の中の割合は 間引き 0.40 / 押し広げ 0.52 / 部位の判定 0.08(24 万枚の実測の比)
+const STAGES: Record<string, { from: number; to: number; label: string }> = {
+  eliminate: { from: 0, to: 0.4, label: '鱗を配置中' },
+  relax: { from: 0.4, to: 0.92, label: '鱗の間隔をそろえています' },
+  separate: { from: 0.92, to: 1, label: '離れた部位を判定中' },
+};
+let progressTimer = 0;
+let progressStart = 0;
+function showProgress(): void {
+  progressStart = performance.now();
+  $('progress').hidden = false;
+  $('progressTime').textContent = '経過 0.0 秒';
+  setProgress(0, '準備中…');
+  clearInterval(progressTimer);
+  progressTimer = window.setInterval(() => {
+    $('progressTime').textContent = `経過 ${((performance.now() - progressStart) / 1000).toFixed(1)} 秒`;
+  }, 200);
+}
+function setProgress(f: number, label: string): void {
+  const pct = Math.max(0, Math.min(1, f)) * 100;
+  $('progressFill').style.width = `${pct}%`;
+  $('progressPct').textContent = `${Math.floor(pct)}%`;
+  if (!running?.signal.aborted) $('progressLabel').textContent = label;
+}
+function hideProgress(): void {
+  clearInterval(progressTimer);
+  $('progress').hidden = true;
 }
 
 function clearResults(): void {
@@ -380,33 +418,55 @@ function clearResults(): void {
   $<HTMLButtonElement>('view2d').disabled = true;
 }
 
+// 鱗がこれより多いときは、始める前に確認する(間違えて重い設定で始めないように)
+const CONFIRM_COUNT = 300000;
+
 let busy = false;
+let running: AbortController | null = null;
 async function generate(): Promise<void> {
   const s = state.surface;
   if (!s || !state.flow || !state.tileTex || busy) return;
   const mats = s.materials.map((_, i) => i).filter((i) => state.matMask[i]);
   if (mats.length === 0) { setStatus('鱗を付けるマテリアルを選んでください'); return; }
+  const sp = spacing();
+  const estimate = Math.round(surfaceArea(s, state.matMask) / (sp * sp));
+  if (estimate > CONFIRM_COUNT &&
+    !window.confirm(`鱗が約 ${estimate.toLocaleString()} 枚になり、時間がかかります(途中で中止もできます)。生成しますか?`)) return;
+
   busy = true;
+  const ac = new AbortController();
+  running = ac;
   $<HTMLButtonElement>('genBtn').disabled = true;
+  $<HTMLButtonElement>('reseed').disabled = true;
+  showProgress();
   try {
     clearResults();
     const res = Number($<HTMLSelectElement>('res').value);
-    const sp = spacing();
     const tAll = performance.now();
-    setStatus('鱗を配置中…');
+    setStatus('生成中…');
     const ts = tileSize(state.tile, sp, num('overlap'));
     const tp: TileParams = {
       tileW: ts.w, tileH: ts.h, sizeVar: num('sizeVar'), flip: $<HTMLInputElement>('flip').checked,
       heightDome: 0.45, maxLayers: 6,
     };
+    const separate = $<HTMLInputElement>('separate').checked;
+    const estPlace = estimate * 70e-6;
+    const estTex = mats.length * (res / 2048) ** 2;
+    const placeFrac = Math.min(0.9, Math.max(0.15, estPlace / (estPlace + estTex)));
     const sc = await runScatter({
       scatter: {
         positions: s.positions, normals: s.normals, tris: s.tris, triMat: s.triMat, triUV: s.triUV,
         flow: state.flow, matMask: state.matMask, spacing: sp, seed: state.seed,
       },
       // 面上距離 / 直線距離 > 2.5 なら別の部位(Houdini 版 geo_ratio と同じ値)
-      separation: $<HTMLInputElement>('separate').checked ? { rad: Generator.reachRadius(tp), ratio: 2.5 } : null,
+      separation: separate ? { rad: Generator.reachRadius(tp), ratio: 2.5 } : null,
+    }, ac.signal, (stage, f) => {
+      const st = STAGES[stage];
+      // 部位の判定をしないときは、押し広げまでで配置の取り分を使い切る
+      const to = !separate && stage === 'relax' ? 1 : st.to;
+      setProgress(placeFrac * (st.from + (to - st.from) * f), `${st.label}…`);
     });
+    if (ac.signal.aborted) throw abortError();
     state.scales = sc.scales;
     state.forbid = sc.forbid;
     state.timings = { scatterMs: sc.ms, separationMs: sc.sepMs };
@@ -415,36 +475,58 @@ async function generate(): Promise<void> {
     let k = 0;
     for (const mi of mats) {
       const t0 = performance.now();
+      const label = `テクスチャを作成中(${s.materials[mi]}${mats.length > 1 ? ` ${k + 1}/${mats.length}` : ''})…`;
+      setProgress(placeFrac + (1 - placeFrac) * (k / mats.length), label);
       const r = await gen.runMaterial(s, mi, res, sp, state.tileTex, state.tileHTex, (f) => {
-        setStatus(`テクスチャ生成中… ${s.materials[mi]} ${Math.round(((k + f) / mats.length) * 100)}%`);
-      });
+        setProgress(placeFrac + (1 - placeFrac) * ((k + f * 0.95) / mats.length), label);
+      }, ac.signal);
       state.timings[`tile_${s.materials[mi]}`] = performance.now() - t0;
       state.results.set(mi, r);
+      // 着色と読み戻し(大きい解像度では 1 秒ほどかかる)。表示を更新してから始める
+      setProgress(placeFrac + (1 - placeFrac) * ((k + 0.95) / mats.length), `仕上げ中(${s.materials[mi]})…`);
+      await new Promise((ok) => requestAnimationFrame(() => setTimeout(ok, 0)));
+      if (ac.signal.aborted) throw abortError();
       const o = gen.shade(r, shadeParams(), state.sourceTex.get(mi) ?? null);
       state.shaded.set(mi, o);
       viewer.setPreview(mi, o.color, o.normal, res);
       k++;
     }
+    setProgress(1, '完了');
     state.timings.totalMs = performance.now() - tAll;
     setStatus(
       `完了: 鱗 ${sc.scales.count.toLocaleString()} 枚 / ${res}px / ${mats.length} マテリアル\n` +
       `配置 ${(sc.ms / 1000).toFixed(2)} 秒` +
-      ($<HTMLInputElement>('separate').checked ? `・部位の判定 ${(sc.sepMs / 1000).toFixed(2)} 秒` : '') +
+      (separate ? `・部位の判定 ${(sc.sepMs / 1000).toFixed(2)} 秒` : '') +
       `・合計 ${(state.timings.totalMs / 1000).toFixed(2)} 秒`,
     );
     $<HTMLButtonElement>('exportBtn').disabled = false;
     $<HTMLButtonElement>('view2d').disabled = false;
     draw2d();
   } catch (err) {
-    console.error(err);
-    setStatus(`生成に失敗しました: ${err instanceof Error ? err.message : String(err)}`);
+    if (isAbort(err)) {
+      clearResults();
+      setStatus('中止しました。設定を直して、もう一度「生成」を押してください。');
+    } else {
+      console.error(err);
+      setStatus(`生成に失敗しました: ${err instanceof Error ? err.message : String(err)}`);
+    }
   } finally {
     busy = false;
+    running = null;
+    hideProgress();
     $<HTMLButtonElement>('genBtn').disabled = false;
+    $<HTMLButtonElement>('reseed').disabled = false;
+    $<HTMLButtonElement>('cancelBtn').disabled = false;
   }
 }
 $('genBtn').addEventListener('click', generate);
 $('reseed').addEventListener('click', () => { state.seed++; generate(); });
+$('cancelBtn').addEventListener('click', () => {
+  if (!running) return;
+  running.abort();
+  $<HTMLButtonElement>('cancelBtn').disabled = true;
+  $('progressLabel').textContent = '中止しています…';
+});
 
 // ---------- 書き出し ----------
 async function buildExport(): Promise<Record<string, Uint8Array>> {
