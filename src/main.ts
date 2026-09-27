@@ -17,12 +17,17 @@ import { applyMask } from './core/maskfilter';
 import { sizeAt, toSizeMapData, type SizeFieldInput, type SizeMapData } from './core/sizefield';
 import { checkSupport } from './support';
 import { attachNumberFields, sliderValue } from './numfield';
+import { applyStatic, getLang, onLangChange, setLang, t, type Lang } from './i18n';
 import {
   applyControls, clearSettings, collectControls, dataURLToFile, fileToDataURL, loadSettings, MAX_IMAGE_CHARS, saveSettings,
   type ImageSetting, type TileSetting,
 } from './settings';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+// 画面の言語(保存した言語、無ければブラウザの言語)。固定の文言をここで入れ替える
+applyStatic();
+$<HTMLSelectElement>('lang').value = getLang();
+$('lang').addEventListener('change', () => setLang($<HTMLSelectElement>('lang').value as Lang));
 // スライダーの値は数値欄から読む(スライダーの範囲を超えた値も入れられる)
 attachNumberFields();
 const num = (id: string) => sliderValue(id);
@@ -41,7 +46,8 @@ if (unsupported) {
 
 // 版表示: package.json の version + ビルドしたコミット。版を上げ忘れてもコミットで区別できる
 $('appVersion').textContent = `v${__APP_VERSION__}` + (__BUILD_SHA__ ? ` (${__BUILD_SHA__})` : '') + (import.meta.env.DEV ? ' dev' : '');
-$('appVersion').title = `ビルド日 ${__BUILD_DATE__}`;
+const renderVersionTitle = () => { $('appVersion').title = t('build.date', { date: __BUILD_DATE__ }); };
+renderVersionTitle();
 
 const viewer = new Viewer($('view'));
 const gen = new Generator(viewer.renderer);
@@ -55,6 +61,7 @@ const state = {
   tile: makePresetTile('skink'),
   tileSource: { kind: 'preset', id: 'skink' } as TileSetting,    // 設定の保存用: 鱗の形の出どころ
   tileHSource: null as ImageSetting | null,
+  tileHName: '',                                   // 高さ画像のファイル名(表示用)
   tileTex: null as THREE.Texture | null,
   tileHTex: null as THREE.Texture | null,         // 鱗の高さ画像(任意)
   seed: 1,
@@ -113,16 +120,35 @@ function rebuildSurface(): void {
   state.sourceTex.clear();
   clearResults();
   viewer.setSurface(s);
+  renderModelInfo();
+  renderMatList();
+  updateFlow();
+  updateCount();
+  renderSourceList();
+  renderMaskList();
+  renderSizeMapList();
+}
+
+function renderModelInfo(): void {
+  const s = state.surface;
+  if (!s) { $('modelInfo').textContent = t('model.none'); return; }
   const size = s.bboxMax.map((v, i) => v - s.bboxMin[i]);
-  $('modelInfo').textContent =
-    `${state.modelName}\n大きさ: 幅 ${fmtLen(size[0])} × 高さ ${fmtLen(size[1])} × 奥行 ${fmtLen(size[2])}\n` +
-    `頂点 ${s.positions.length / 3} / 三角形 ${s.triMat.length}`;
+  $('modelInfo').textContent = t('model.info', {
+    name: state.modelName, w: fmtLen(size[0]), h: fmtLen(size[1]), d: fmtLen(size[2]),
+    v: s.positions.length / 3, t: s.triMat.length,
+  });
+}
+
+// マテリアルの選択欄(言語を切り替えたときも、選択の状態を保ったまま作り直す)
+function renderMatList(): void {
+  const s = state.surface;
   const list = $('matList');
-  list.innerHTML = '<div class="hint">鱗を付けるマテリアル</div>';
+  if (!s) { list.innerHTML = ''; return; }
+  list.innerHTML = `<div class="hint">${escapeHtml(t('mat.header'))}</div>`;
   s.materials.forEach((m, i) => {
     const l = document.createElement('label');
-    l.innerHTML = `<input type="checkbox" checked data-i="${i}"> ${escapeHtml(m)}` +
-      (s.uvTiles[i] > 1 ? ` <span class="warn" title="UV が複数の 0〜1 の枠にまたがっています。重なった部分は同じ画素に描かれます">⚠ UV が枠外</span>` : '');
+    l.innerHTML = `<input type="checkbox"${state.matMask[i] ? ' checked' : ''} data-i="${i}"> ${escapeHtml(m)}` +
+      (s.uvTiles[i] > 1 ? ` <span class="warn" title="${escapeHtml(t('mat.uvWarnTitle'))}">${escapeHtml(t('mat.uvWarn'))}</span>` : '');
     l.querySelector('input')!.addEventListener('change', (e) => {
       state.matMask[i] = (e.target as HTMLInputElement).checked;
       viewer.setMaterialActive(i, state.matMask[i]);
@@ -134,22 +160,17 @@ function rebuildSurface(): void {
     });
     list.appendChild(l);
   });
-  updateFlow();
-  updateCount();
-  renderSourceList();
-  renderMaskList();
-  renderSizeMapList();
 }
 
 $('modelFile').addEventListener('change', async (e) => {
   const f = (e.target as HTMLInputElement).files?.[0];
   if (!f) return;
-  setStatus('読み込み中…');
+  setStatus(() => t('status.loading'));
   try {
     await loadModelBuffer(await f.arrayBuffer(), f.name);
     setStatus('');
   } catch (err) {
-    setStatus(`読み込みに失敗しました: ${(err as Error).message}`);
+    setStatus(() => t('status.loadFail', { msg: (err as Error).message }));
   }
 });
 $('unit').addEventListener('change', rebuildSurface);
@@ -167,17 +188,21 @@ function setTile(t: TileImage, source: TileSetting): void {
   tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
   state.tileTex = tex;
   setTileHeight(null, '');   // 形を変えたら高さ画像は合わなくなるので外す
-  document.querySelectorAll('#tilePresets button').forEach((b) => b.classList.toggle('on', (b as HTMLElement).dataset.name === t.name));
+  document.querySelectorAll<HTMLElement>('#tilePresets button')
+    .forEach((b) => b.classList.toggle('on', source.kind === 'preset' && b.dataset.id === source.id));
   updateCount();
 }
 for (const p of TILE_PRESETS) {
-  const t = makePresetTile(p.id);
+  const tile = makePresetTile(p.id);
   const b = document.createElement('button');
-  b.dataset.name = t.name;
+  b.dataset.id = p.id;
   const cv = document.createElement('canvas');
   cv.width = cv.height = 64;
-  cv.getContext('2d')!.drawImage(t.canvas, 0, 0, 64, 64);
-  b.append(cv, p.name);
+  cv.getContext('2d')!.drawImage(tile.canvas, 0, 0, 64, 64);
+  const name = document.createElement('span');
+  name.dataset.i18n = `tile.${p.id}`;
+  name.textContent = t(`tile.${p.id}` as Parameters<typeof t>[0]);
+  b.append(cv, name);
   b.addEventListener('click', () => { setTile(makePresetTile(p.id), { kind: 'preset', id: p.id }); persist(); });
   $('tilePresets').appendChild(b);
 }
@@ -202,8 +227,12 @@ function setTileHeight(canvas: HTMLCanvasElement | null, name: string, source: I
     tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
     state.tileHTex = tex;
   }
-  $('tileHInfo').textContent = canvas ? `高さ画像: ${name}` : '高さ画像なし(鱗の形から自動で膨らみを作ります)';
+  state.tileHName = canvas ? name : '';
+  renderTileHInfo();
   $('tileHClear').hidden = !canvas;
+}
+function renderTileHInfo(): void {
+  $('tileHInfo').textContent = state.tileHName ? t('tile.heightName', { name: state.tileHName }) : t('tile.noHeight');
 }
 async function loadTileHeightFile(f: File): Promise<void> {
   const bmp = await createImageBitmap(f, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
@@ -287,11 +316,10 @@ function updateCount(): void {
   const texel = Math.sqrt(a / Math.max(uvArea(state.surface, state.matMask), 1e-9)) / res;
   const px = spacing() / texel;
   const warn: string[] = [];
-  if (n > 400000) warn.push('⚠ 枚数が多すぎます。鱗を大きくしてください');
-  if (px < 8) warn.push('⚠ テクスチャ上で鱗が小さすぎます。鱗を大きくするか解像度を上げてください');
+  if (n > 400000) warn.push(t('count.tooMany'));
+  if (px < 8) warn.push(t('count.tooSmall'));
   $('countInfo').textContent =
-    `鱗の枚数: 約 ${n.toLocaleString()} 枚(面積 ${(a * 1e4).toFixed(0)} cm²)\n` +
-    `テクスチャ上の鱗 1 枚: 約 ${px.toFixed(0)} px(${res}px のとき)` +
+    t('count.info', { n: n.toLocaleString(), a: (a * 1e4).toFixed(0), px: px.toFixed(0), res }) +
     (warn.length ? `\n${warn.join('\n')}` : '');
 }
 ['size', 'overlap', 'sizeVar', 'res', 'sizeBlack'].forEach((id) => $(id).addEventListener('input', updateCount));
@@ -345,8 +373,8 @@ function updateColorModeUI(): void {
   // 隙間: テクスチャから取るときは色の指定は使わない(その場所の元の色を暗くする)。透過はどのモードでも選べる
   const clear = $<HTMLInputElement>('gapClear').checked;
   $<HTMLInputElement>('gap').disabled = m === 2 || clear;
-  $('gapLabel').textContent = clear ? '隙間(透明)' : m === 2 ? '隙間(元の色を暗く)' : '隙間の色';
-  $('tintRow').querySelector('label')!.textContent = m === 2 ? '鱗の色(テクスチャが無い所)' : '鱗の色';
+  $('gapLabel').textContent = clear ? t('color.gapClear') : m === 2 ? t('color.gapDark') : t('color.gap');
+  $('tintRow').querySelector('label')!.textContent = m === 2 ? t('color.tintNoTex') : t('color.tint');
   $('tintRow').hidden = m === 0;
   $('bellyBox').hidden = m === 2;   // テクスチャから色を取るときは元の色に任せる
 }
@@ -358,7 +386,7 @@ function renderSourceList(): void {
   const list = $('srcTexList');
   list.innerHTML = '';
   const s = state.surface;
-  if (!s) { list.innerHTML = '<div class="hint">先にモデルを読み込んでください</div>'; return; }
+  if (!s) { list.innerHTML = `<div class="hint">${escapeHtml(t('needModel'))}</div>`; return; }
   s.materials.forEach((name, mi) => {
     if (!state.matMask[mi]) return;
     const src = state.sources.get(mi);
@@ -369,10 +397,10 @@ function renderSourceList(): void {
     if (src) thumb.getContext('2d')!.drawImage(src.canvas, 0, 0, 40, 40);
     const label = document.createElement('div');
     label.className = 'name';
-    label.innerHTML = `${escapeHtml(name)}<small>${src ? escapeHtml(src.name) : '未設定'}</small>`;
+    label.innerHTML = `${escapeHtml(name)}<small>${escapeHtml(src ? src.name : t('src.unset'))}</small>`;
     const pick = document.createElement('label');
     pick.className = 'file';
-    pick.innerHTML = '画像を選ぶ<input type="file" accept="image/png,image/jpeg,image/webp">';
+    pick.innerHTML = `${escapeHtml(t('pickImage'))}<input type="file" accept="image/png,image/jpeg,image/webp">`;
     pick.querySelector('input')!.addEventListener('change', async (e) => {
       const f = (e.target as HTMLInputElement).files?.[0];
       if (f) await setSource(mi, f);
@@ -404,7 +432,7 @@ function renderImageSlots(
   const list = $(listId);
   list.innerHTML = '';
   const s = state.surface;
-  if (!s) { list.innerHTML = '<div class="hint">先にモデルを読み込んでください</div>'; return; }
+  if (!s) { list.innerHTML = `<div class="hint">${escapeHtml(t('needModel'))}</div>`; return; }
   s.materials.forEach((name, mi) => {
     if (!state.matMask[mi]) return;
     const m = images.get(mi);
@@ -415,12 +443,12 @@ function renderImageSlots(
     if (m) thumb.getContext('2d')!.drawImage(m.canvas, 0, 0, 40, 40);
     const label = document.createElement('div');
     label.className = 'name';
-    label.innerHTML = `${escapeHtml(name)}<small>${m ? escapeHtml(m.name) : emptyText}</small>`;
+    label.innerHTML = `${escapeHtml(name)}<small>${escapeHtml(m ? m.name : emptyText)}</small>`;
     const tools = document.createElement('div');
     tools.className = 'tools';
     const pick = document.createElement('label');
     pick.className = 'file';
-    pick.innerHTML = '画像を選ぶ<input type="file" accept="image/png,image/jpeg,image/webp">';
+    pick.innerHTML = `${escapeHtml(t('pickImage'))}<input type="file" accept="image/png,image/jpeg,image/webp">`;
     pick.querySelector('input')!.addEventListener('change', async (e) => {
       const f = (e.target as HTMLInputElement).files?.[0];
       if (f) onSet(mi, f);
@@ -428,7 +456,7 @@ function renderImageSlots(
     tools.appendChild(pick);
     if (m) {
       const clear = document.createElement('button');
-      clear.textContent = '外す';
+      clear.textContent = t('remove');
       clear.addEventListener('click', () => onSet(mi, null));
       tools.appendChild(clear);
     }
@@ -439,7 +467,7 @@ function renderImageSlots(
 
 // --- 鱗を貼らない範囲(マスク) ---
 function renderMaskList(): void {
-  renderImageSlots('maskList', state.masks, 'なし(全体に貼る)', (mi, f) => { void setMask(mi, f); });
+  renderImageSlots('maskList', state.masks, t('mask.empty'), (mi, f) => { void setMask(mi, f); });
 }
 
 // マスクは鱗の配置が決まったあとで効くので、生成済みなら作り直す(配置は同じ乱数で同じ結果になる)
@@ -455,7 +483,7 @@ $('maskInvert').addEventListener('change', () => {
 
 // --- サイズマップ ---
 function renderSizeMapList(): void {
-  renderImageSlots('sizeMapList', state.sizeMaps, 'なし(どこも同じ大きさ)', (mi, f) => { void setSizeMap(mi, f); });
+  renderImageSlots('sizeMapList', state.sizeMaps, t('sizemap.empty'), (mi, f) => { void setSizeMap(mi, f); });
 }
 // 鱗の配置から変わるので、生成済みなら作り直す
 async function setSizeMap(mi: number, file: File | null): Promise<void> {
@@ -479,7 +507,7 @@ function applyScaleColors(): void {
 }
 
 // ---------- 6. 生成 ----------
-const abortError = () => new DOMException('中止しました', 'AbortError');
+const abortError = () => new DOMException(t('err.aborted'), 'AbortError');
 const isAbort = (e: unknown) => e instanceof DOMException && e.name === 'AbortError';
 
 // 鱗の配置は Worker で回す。中止は Worker ごと止める。
@@ -519,21 +547,21 @@ function runScatter(inp: ScatterJob, signal: AbortSignal, onProgress: Progress):
 // 全体を 1 本のバーにする。配置とテクスチャの取り分は、見込み時間の比で決める
 // (実測 Akyo: 配置 ≈ 枚数 × 70µs、テクスチャ ≈ 1 秒 × (解像度/2048)² × マテリアル数)。
 // 配置の中の割合は 間引き 0.40 / 押し広げ 0.52 / 部位の判定 0.08(24 万枚の実測の比)
-const STAGES: Record<string, { from: number; to: number; label: string }> = {
-  eliminate: { from: 0, to: 0.4, label: '鱗を配置中' },
-  relax: { from: 0.4, to: 0.92, label: '鱗の間隔をそろえています' },
-  separate: { from: 0.92, to: 1, label: '離れた部位を判定中' },
+const STAGES: Record<string, { from: number; to: number; label: () => string }> = {
+  eliminate: { from: 0, to: 0.4, label: () => t('stage.eliminate') },
+  relax: { from: 0.4, to: 0.92, label: () => t('stage.relax') },
+  separate: { from: 0.92, to: 1, label: () => t('stage.separate') },
 };
 let progressTimer = 0;
 let progressStart = 0;
 function showProgress(): void {
   progressStart = performance.now();
   $('progress').hidden = false;
-  $('progressTime').textContent = '経過 0.0 秒';
-  setProgress(0, '準備中…');
+  $('progressTime').textContent = t('prog.elapsed', { s: '0.0' });
+  setProgress(0, t('prog.preparing'));
   clearInterval(progressTimer);
   progressTimer = window.setInterval(() => {
-    $('progressTime').textContent = `経過 ${((performance.now() - progressStart) / 1000).toFixed(1)} 秒`;
+    $('progressTime').textContent = t('prog.elapsed', { s: ((performance.now() - progressStart) / 1000).toFixed(1) });
   }, 200);
 }
 function setProgress(f: number, label: string): void {
@@ -565,11 +593,11 @@ async function generate(): Promise<void> {
   const s = state.surface;
   if (!s || !state.flow || !state.tileTex || busy) return;
   const mats = s.materials.map((_, i) => i).filter((i) => state.matMask[i]);
-  if (mats.length === 0) { setStatus('鱗を付けるマテリアルを選んでください'); return; }
+  if (mats.length === 0) { setStatus(() => t('status.pickMat')); return; }
   const sp = spacing();
   const estimate = estimateCount(s);   // サイズマップがあれば小さい所ほど多く数える
   if (estimate > CONFIRM_COUNT &&
-    !window.confirm(`鱗が約 ${estimate.toLocaleString()} 枚になり、時間がかかります(途中で中止もできます)。生成しますか?`)) return;
+    !window.confirm(t('confirm.many', { n: estimate.toLocaleString() }))) return;
 
   busy = true;
   const ac = new AbortController();
@@ -581,7 +609,7 @@ async function generate(): Promise<void> {
     clearResults();
     const res = Number($<HTMLSelectElement>('res').value);
     const tAll = performance.now();
-    setStatus('生成中…');
+    setStatus(() => t('status.generating'));
     const ts = tileSize(state.tile, sp, num('overlap'));
     const tp: TileParams = {
       tileW: ts.w, tileH: ts.h, sizeVar: num('sizeVar'), flip: $<HTMLInputElement>('flip').checked,
@@ -602,13 +630,13 @@ async function generate(): Promise<void> {
       const st = STAGES[stage];
       // 部位の判定をしないときは、押し広げまでで配置の取り分を使い切る
       const to = !separate && stage === 'relax' ? 1 : st.to;
-      setProgress(placeFrac * (st.from + (to - st.from) * f), `${st.label}…`);
+      setProgress(placeFrac * (st.from + (to - st.from) * f), `${st.label()}…`);
     });
     if (ac.signal.aborted) throw abortError();
     // 配置が確定してから、中心がマスクの外にある鱗を取り除く(残った鱗は境界をまたいでも形を保つ)
     const masked = applyMask(sc.scales, sc.forbid, state.masks, $<HTMLInputElement>('maskInvert').checked);
     if (masked.scales.count === 0) {
-      throw new Error('マスクで鱗がすべて取り除かれました。マスクの白黒(反転)を確かめてください');
+      throw new Error(t('err.maskAll'));
     }
     state.scales = masked.scales;
     state.forbid = masked.forbid;
@@ -619,7 +647,7 @@ async function generate(): Promise<void> {
     let k = 0;
     for (const mi of mats) {
       const t0 = performance.now();
-      const label = `テクスチャを作成中(${s.materials[mi]}${mats.length > 1 ? ` ${k + 1}/${mats.length}` : ''})…`;
+      const label = t('prog.texture', { mat: s.materials[mi], part: mats.length > 1 ? ` ${k + 1}/${mats.length}` : '' });
       setProgress(placeFrac + (1 - placeFrac) * (k / mats.length), label);
       const r = await gen.runMaterial(s, mi, res, sp, state.tileTex, state.tileHTex, (f) => {
         setProgress(placeFrac + (1 - placeFrac) * ((k + f * 0.95) / mats.length), label);
@@ -628,7 +656,7 @@ async function generate(): Promise<void> {
       state.results.set(mi, r);
       // 着色と読み戻し(大きい解像度では 1 秒ほどかかる)。表示を更新してから始める。
       // ⚠ requestAnimationFrame で待たない: 別のタブを見ている間は止まり、生成がそこで止まってしまう
-      setProgress(placeFrac + (1 - placeFrac) * ((k + 0.95) / mats.length), `仕上げ中(${s.materials[mi]})…`);
+      setProgress(placeFrac + (1 - placeFrac) * ((k + 0.95) / mats.length), t('prog.finish', { mat: s.materials[mi] }));
       await new Promise((ok) => setTimeout(ok, 20));
       if (ac.signal.aborted) throw abortError();
       const o = gen.shade(r, shadeParams(), state.sourceTex.get(mi) ?? null);
@@ -636,26 +664,28 @@ async function generate(): Promise<void> {
       viewer.setPreview(mi, o.color, o.normal, res, $<HTMLInputElement>('gapClear').checked);
       k++;
     }
-    setProgress(1, '完了');
+    setProgress(1, t('prog.done'));
     state.timings.totalMs = performance.now() - tAll;
-    setStatus(
-      `完了: 鱗 ${state.scales.count.toLocaleString()} 枚` +
-      (state.maskRemoved > 0 ? `(マスクで ${state.maskRemoved.toLocaleString()} 枚を除去)` : '') +
-      ` / ${res}px / ${mats.length} マテリアル\n` +
-      `配置 ${(sc.ms / 1000).toFixed(2)} 秒` +
-      (separate ? `・部位の判定 ${(sc.sepMs / 1000).toFixed(2)} 秒` : '') +
-      `・合計 ${(state.timings.totalMs / 1000).toFixed(2)} 秒`,
-    );
+    const count = state.scales.count, removed = state.maskRemoved, total = state.timings.totalMs;
+    setStatus(() => t('status.done', {
+      n: count.toLocaleString(),
+      masked: removed > 0 ? t('status.masked', { n: removed.toLocaleString() }) : '',
+      res, m: mats.length,
+      place: (sc.ms / 1000).toFixed(2),
+      sep: separate ? t('status.sep', { s: (sc.sepMs / 1000).toFixed(2) }) : '',
+      total: (total / 1000).toFixed(2),
+    }));
     $<HTMLButtonElement>('exportBtn').disabled = false;
     $<HTMLButtonElement>('view2d').disabled = false;
     draw2d();
   } catch (err) {
     if (isAbort(err)) {
       clearResults();
-      setStatus('中止しました。設定を直して、もう一度「生成」を押してください。');
+      setStatus(() => t('status.aborted'));
     } else {
       console.error(err);
-      setStatus(`生成に失敗しました: ${err instanceof Error ? err.message : String(err)}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      setStatus(() => t('status.genFail', { msg }));
     }
   } finally {
     busy = false;
@@ -672,7 +702,7 @@ $('cancelBtn').addEventListener('click', () => {
   if (!running) return;
   running.abort();
   $<HTMLButtonElement>('cancelBtn').disabled = true;
-  $('progressLabel').textContent = '中止しています…';
+  $('progressLabel').textContent = t('prog.cancelling');
 });
 
 // ---------- 書き出し ----------
@@ -693,9 +723,9 @@ async function buildExport(): Promise<Record<string, Uint8Array>> {
   return files;
 }
 $('exportBtn').addEventListener('click', async () => {
-  setStatus('書き出し中…');
+  setStatus(() => t('status.exporting'));
   downloadZip(await buildExport(), `${safeName(state.modelName)}_scales.zip`);
-  setStatus('書き出しました');
+  setStatus(() => t('status.exported'));
 });
 
 // ---------- 2D 表示 ----------
@@ -718,7 +748,12 @@ function draw2d(): void {
 }
 
 // ---------- 小物 ----------
-function setStatus(t: string): void { $('status').textContent = t; }
+// 状態の表示。文言を作る関数で渡すと、言語を切り替えたときに作り直せる
+let statusText: () => string = () => '';
+function setStatus(s: string | (() => string)): void {
+  statusText = typeof s === 'function' ? s : () => s;
+  $('status').textContent = statusText();
+}
 function fmtLen(m: number): string { return m >= 1 ? `${m.toFixed(2)} m` : `${(m * 100).toFixed(1)} cm`; }
 function safeName(s: string): string { return s.replace(/[\\/:*?"<>|\s]+/g, '_'); }
 function escapeHtml(s: string): string { return s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`); }
@@ -768,7 +803,7 @@ async function restoreSettings(): Promise<void> {
 const restored = restoreSettings();
 
 $('resetBtn').addEventListener('click', async () => {
-  if (!window.confirm('すべての設定を最初の状態に戻しますか?(読み込んだモデルと生成結果はそのままです)')) return;
+  if (!window.confirm(t('confirm.reset'))) return;
   await restored;
   restoring = true;
   try {
@@ -782,7 +817,22 @@ $('resetBtn').addEventListener('click', async () => {
   clearTimeout(persistTimer);
   clearSettings();
   $('tileSaveNote').hidden = true;
-  setStatus('設定を最初の状態に戻しました。');
+  setStatus(() => t('status.reset'));
+});
+
+// 言語を切り替えたら、スクリプトで作った文言を作り直す(固定の文言は applyStatic が入れ替える)
+onLangChange(() => {
+  renderVersionTitle();
+  renderModelInfo();
+  renderMatList();
+  renderSourceList();
+  renderMaskList();
+  renderSizeMapList();
+  renderTileHInfo();
+  updateCount();
+  updateColorModeUI();
+  $('status').textContent = statusText();
+  if (running?.signal.aborted) $('progressLabel').textContent = t('prog.cancelling');
 });
 
 if (import.meta.env.DEV) {

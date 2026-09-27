@@ -27,7 +27,8 @@ body {
   image-rendering: auto; background: #000;
 }
 h1 { font-size: 17px; margin: 0 0 8px; }
-h1 small { display: block; font-size: 11px; color: var(--muted); font-weight: normal; }
+.head h1 { margin: 0; }
+.subtitle { font-size: 11px; color: var(--muted); margin: 2px 0 10px; }
 section { border-top: 1px solid var(--line); padding: 10px 0 8px; }
 h2 { font-size: 13px; margin: 0 0 8px; display: flex; align-items: center; gap: 6px; }
 h2 span {
@@ -101,8 +102,9 @@ details summary { cursor: pointer; color: var(--muted); margin: 6px 0; }
 .pbar { height: 8px; border-radius: 4px; background: #3a3e45; overflow: hidden; }
 #progressFill { height: 100%; width: 0; background: var(--accent); transition: width 0.15s linear; }
 .pbottom { margin-top: 8px; }
-.head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
-button.small { font-size: 11px; padding: 3px 7px; flex: none; margin-top: 2px; }
+.head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+button.small, select.small { font-size: 11px; padding: 3px 7px; flex: none; }
+.headtools { display: flex; align-items: center; gap: 4px; flex: none; }
 #tileSaveNote[hidden] { display: none; }
 .inline { display: flex; align-items: center; gap: 8px; }
 .inline .check { margin: 0; }

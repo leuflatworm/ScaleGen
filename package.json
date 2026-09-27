@@ -1,7 +1,7 @@
 {
   "name": "scalegen",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "FBX モデルに合わせて継ぎ目の無い鱗テクスチャを作るブラウザツール",
   "license": "MIT",
   "author": "Leu",

@@ -4,29 +4,38 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>ScaleGen</title>
-  <meta name="description" content="FBX モデルに合わせて、継ぎ目の無い鱗テクスチャ(BaseColor / Normal / AO / Height)をブラウザだけで作るツール。モデルや画像はどこにも送信されません。" />
-  <meta property="og:title" content="ScaleGen — 鱗テクスチャジェネレーター" />
-  <meta property="og:description" content="FBX モデルに合わせて、継ぎ目の無い鱗テクスチャをブラウザだけで作るツール。" />
+  <meta name="description" content="FBX モデルに合わせて、継ぎ目の無い鱗テクスチャ(BaseColor / Normal / AO / Height)をブラウザだけで作るツール。モデルや画像はどこにも送信されません。 / Make seamless scale textures (BaseColor / Normal / AO / Height) for your FBX model, right in the browser. Nothing is uploaded." />
+  <meta property="og:title" content="ScaleGen — 鱗テクスチャジェネレーター / Scale texture generator" />
+  <meta property="og:description" content="FBX モデルに合わせて、継ぎ目の無い鱗テクスチャをブラウザだけで作るツール。 / Seamless scale textures for your FBX model, right in the browser." />
   <meta property="og:type" content="website" />
   <meta name="theme-color" content="#25282d" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2325282d'/%3E%3Cpath d='M6 12a5 5 0 0 1 10 0v6H6z' fill='%236b7a3a'/%3E%3Cpath d='M16 12a5 5 0 0 1 10 0v6H16z' fill='%236b7a3a'/%3E%3Cpath d='M11 20a5 5 0 0 1 10 0v6H11z' fill='%23e8a33c'/%3E%3C/svg%3E" />
   <link rel="stylesheet" href="./src/style.css" />
 </head>
 <body>
+  <!-- 文言は src/i18n.ts の辞書から入る(data-i18n = textContent / data-i18n-html = HTML / data-i18n-title = title)。
+       ここに書いてある日本語は読み込み前の表示用 -->
   <aside id="panel">
     <div class="head">
-      <h1>ScaleGen <small>鱗テクスチャジェネレーター(試作)</small></h1>
-      <button id="resetBtn" class="small" title="すべての設定を最初の状態に戻します">設定をリセット</button>
+      <h1>ScaleGen</h1>
+      <div class="headtools">
+        <select id="lang" class="small" data-i18n-title="lang.title" title="言語 / Language">
+          <option value="ja">日本語</option>
+          <option value="en">English</option>
+        </select>
+        <button id="resetBtn" class="small" data-i18n="reset" data-i18n-title="reset.title" title="すべての設定を最初の状態に戻します">設定をリセット</button>
+      </div>
     </div>
+    <p class="subtitle" data-i18n="app.subtitle">鱗テクスチャジェネレーター(試作)</p>
 
     <section>
-      <h2><span>1</span>モデル</h2>
-      <label class="file">FBX を開く<input id="modelFile" type="file" accept=".fbx,.obj,.glb,.gltf" /></label>
-      <div id="modelInfo" class="info">まだ読み込まれていません</div>
+      <h2><span>1</span><b data-i18n="s1">モデル</b></h2>
+      <label class="file"><span data-i18n="model.open">FBX を開く</span><input id="modelFile" type="file" accept=".fbx,.obj,.glb,.gltf" /></label>
+      <div id="modelInfo" class="info" data-i18n="model.none">まだ読み込まれていません</div>
       <div class="row">
-        <label for="unit">単位</label>
+        <label for="unit" data-i18n="unit">単位</label>
         <select id="unit">
-          <option value="auto">自動</option>
+          <option value="auto" data-i18n="unit.auto">自動</option>
           <option value="1">m</option>
           <option value="0.01">cm</option>
           <option value="0.001">mm</option>
@@ -34,129 +43,129 @@
       </div>
       <div id="matList" class="matlist"></div>
       <details id="maskBox">
-        <summary>鱗を貼らない範囲(マスク)</summary>
-        <p class="hint">モデルと同じ UV の白黒画像を読み込みます。白 = 鱗を貼る、黒・透明 = 貼らない。<br />
+        <summary data-i18n="mask.summary">鱗を貼らない範囲(マスク)</summary>
+        <p class="hint" data-i18n-html="mask.hint">モデルと同じ UV の白黒画像を読み込みます。白 = 鱗を貼る、黒・透明 = 貼らない。<br />
           鱗は「中心が白い所にあるもの」だけが残るので、境界でも 1 枚ずつの形は切れません。</p>
         <div id="maskList" class="srclist"></div>
-        <label class="check"><input id="maskInvert" type="checkbox" /> 白黒を反転する(白 = 貼らない)</label>
+        <label class="check"><input id="maskInvert" type="checkbox" /> <span data-i18n="mask.invert">白黒を反転する(白 = 貼らない)</span></label>
       </details>
     </section>
 
     <section>
-      <h2><span>2</span>鱗の形</h2>
+      <h2><span>2</span><b data-i18n="s2">鱗の形</b></h2>
       <div id="tilePresets" class="tiles"></div>
-      <label class="file small">画像を読み込む(PNG・透過)<input id="tileFile" type="file" accept="image/png,image/webp" /></label>
+      <label class="file small"><span data-i18n="tile.load">画像を読み込む(PNG・透過)</span><input id="tileFile" type="file" accept="image/png,image/webp" /></label>
       <div class="row">
-        <label class="file small grow">高さ画像(任意)<input id="tileHFile" type="file" accept="image/png,image/jpeg,image/webp" /></label>
-        <button id="tileHClear" hidden>外す</button>
+        <label class="file small grow"><span data-i18n="tile.height">高さ画像(任意)</span><input id="tileHFile" type="file" accept="image/png,image/jpeg,image/webp" /></label>
+        <button id="tileHClear" hidden data-i18n="remove">外す</button>
       </div>
-      <div id="tileSaveNote" class="hint warn" hidden>画像が大きいため、次に開いたときには読み込まれません(ほかの設定は保存されます)</div>
+      <div id="tileSaveNote" class="hint warn" hidden data-i18n="tile.saveNote">画像が大きいため、次に開いたときには読み込まれません(ほかの設定は保存されます)</div>
       <div id="tileHInfo" class="hint">高さ画像なし(鱗の形から自動で膨らみを作ります)</div>
-      <p class="hint">画像の下 = 付け根、上 = 先端(次の鱗に重なる側)</p>
+      <p class="hint" data-i18n="tile.orient">画像の下 = 付け根、上 = 先端(次の鱗に重なる側)</p>
     </section>
 
     <section>
-      <h2><span>3</span>流れ</h2>
+      <h2><span>3</span><b data-i18n="s3">流れ</b></h2>
       <div class="row">
-        <label for="baseDir">基本の向き</label>
+        <label for="baseDir" data-i18n="flow.base">基本の向き</label>
         <select id="baseDir">
-          <option value="0,-1,0">下へ</option>
-          <option value="0,1,0">上へ</option>
-          <option value="0,0,-1">後ろへ</option>
-          <option value="0,0,1">前へ</option>
-          <option value="1,0,0">右へ</option>
-          <option value="-1,0,0">左へ</option>
+          <option value="0,-1,0" data-i18n="dir.down">下へ</option>
+          <option value="0,1,0" data-i18n="dir.up">上へ</option>
+          <option value="0,0,-1" data-i18n="dir.back">後ろへ</option>
+          <option value="0,0,1" data-i18n="dir.front">前へ</option>
+          <option value="1,0,0" data-i18n="dir.right">右へ</option>
+          <option value="-1,0,0" data-i18n="dir.left">左へ</option>
         </select>
       </div>
       <div class="buttons">
-        <button id="drawBtn" class="toggle">✎ 流れを描く</button>
-        <button id="undoCurve">1本戻す</button>
-        <button id="clearCurves">全部消す</button>
+        <button id="drawBtn" class="toggle" data-i18n="flow.draw">✎ 流れを描く</button>
+        <button id="undoCurve" data-i18n="flow.undo">1本戻す</button>
+        <button id="clearCurves" data-i18n="flow.clear">全部消す</button>
       </div>
-      <p class="hint">「流れを描く」をオンにして、モデルの上を <b>頭 → 尻尾</b> の向きにドラッグ。描いた線の近くほど強く効きます。</p>
-      <label class="check"><input id="showFlow" type="checkbox" checked /> 流れの矢印を表示</label>
+      <p class="hint" data-i18n-html="flow.hint">「流れを描く」をオンにして、モデルの上を <b>頭 → 尻尾</b> の向きにドラッグ。描いた線の近くほど強く効きます。</p>
+      <label class="check"><input id="showFlow" type="checkbox" checked /> <span data-i18n="flow.show">流れの矢印を表示</span></label>
     </section>
 
     <section>
-      <h2><span>4</span>大きさ</h2>
-      <div class="slider"><label>鱗の大きさ</label><input id="size" type="range" min="0.5" max="50" step="0.1" value="6" data-min="0.1" data-max="500" data-unit="mm" /></div>
+      <h2><span>4</span><b data-i18n="s4">大きさ</b></h2>
+      <div class="slider"><label data-i18n="size.size">鱗の大きさ</label><input id="size" type="range" min="0.5" max="50" step="0.1" value="6" data-min="0.1" data-max="500" data-unit="mm" /></div>
       <div id="countInfo" class="info"></div>
       <details id="sizeMapBox">
-        <summary>場所ごとに大きさを変える(サイズマップ)</summary>
-        <p class="hint">モデルと同じ UV の白黒画像を読み込むと、明るさに応じて鱗が小さくなります。
+        <summary data-i18n="sizemap.summary">場所ごとに大きさを変える(サイズマップ)</summary>
+        <p class="hint" data-i18n="sizemap.hint">モデルと同じ UV の白黒画像を読み込むと、明るさに応じて鱗が小さくなります。
           白 = 「鱗の大きさ」のまま、黒 = 「最小倍率」まで小さく。小さくした所ほど鱗が多く並びます。</p>
         <div id="sizeMapList" class="srclist"></div>
-        <div class="slider"><label>最小倍率</label><input id="sizeBlack" type="range" min="0.1" max="1" step="0.05" value="0.5" /></div>
+        <div class="slider"><label data-i18n="sizemap.min">最小倍率</label><input id="sizeBlack" type="range" min="0.1" max="1" step="0.05" value="0.5" /></div>
       </details>
       <details>
-        <summary>詳しい設定</summary>
-        <div class="slider"><label>重なり</label><input id="overlap" type="range" min="1.5" max="3.5" step="0.05" value="2.2" data-min="1" data-max="6" /></div>
-        <div class="slider"><label>大きさのばらつき</label><input id="sizeVar" type="range" min="0" max="0.3" step="0.01" value="0.06" data-min="0" data-max="0.5" /></div>
-        <label class="check"><input id="flip" type="checkbox" /> 鱗の向きを反転</label>
-        <label class="check"><input id="separate" type="checkbox" checked /> 離れた部位の鱗を混ぜない(指の間など)</label>
+        <summary data-i18n="adv">詳しい設定</summary>
+        <div class="slider"><label data-i18n="adv.overlap">重なり</label><input id="overlap" type="range" min="1.5" max="3.5" step="0.05" value="2.2" data-min="1" data-max="6" /></div>
+        <div class="slider"><label data-i18n="adv.sizeVar">大きさのばらつき</label><input id="sizeVar" type="range" min="0" max="0.3" step="0.01" value="0.06" data-min="0" data-max="0.5" /></div>
+        <label class="check"><input id="flip" type="checkbox" /> <span data-i18n="adv.flip">鱗の向きを反転</span></label>
+        <label class="check"><input id="separate" type="checkbox" checked /> <span data-i18n="adv.separate">離れた部位の鱗を混ぜない(指の間など)</span></label>
       </details>
     </section>
 
     <section>
-      <h2><span>5</span>色</h2>
+      <h2><span>5</span><b data-i18n="s5">色</b></h2>
       <div class="row">
-        <label>色の付け方</label>
-        <select id="colorMode"><option value="1">色を指定</option><option value="2">テクスチャから</option><option value="0">鱗の画像の色のまま</option></select>
+        <label data-i18n="color.mode">色の付け方</label>
+        <select id="colorMode"><option value="1" data-i18n="color.pick">色を指定</option><option value="2" data-i18n="color.tex">テクスチャから</option><option value="0" data-i18n="color.tile">鱗の画像の色のまま</option></select>
       </div>
       <div id="srcTexBox" hidden>
-        <p class="hint">モデルの色テクスチャ(同じ UV のもの)を読み込むと、鱗の中心の位置の色がその鱗 1 枚の色になります。隙間はその場所の色を暗くしたものになります。</p>
+        <p class="hint" data-i18n="color.texHint">モデルの色テクスチャ(同じ UV のもの)を読み込むと、鱗の中心の位置の色がその鱗 1 枚の色になります。隙間はその場所の色を暗くしたものになります。</p>
         <div id="srcTexList" class="srclist"></div>
       </div>
       <div class="row" id="tintRow"><label for="tint">鱗の色</label><input id="tint" type="color" value="#6b7a3a" /></div>
       <div class="row" id="gapRow">
         <label for="gap" id="gapLabel">隙間の色</label>
         <span class="inline">
-          <label class="check" title="鱗の無い所を透明にします(BaseColor の透明度 = 鱗の被覆)"><input id="gapClear" type="checkbox" /> 透過</label>
+          <label class="check" data-i18n-title="color.clearTitle" title="鱗の無い所を透明にします(BaseColor の透明度 = 鱗の被覆)"><input id="gapClear" type="checkbox" /> <span data-i18n="color.clear">透過</span></label>
           <input id="gap" type="color" value="#1a1a12" />
         </span>
       </div>
       <div id="bellyBox">
-        <label class="check"><input id="belly" type="checkbox" /> お腹側の色を変える</label>
+        <label class="check"><input id="belly" type="checkbox" /> <span data-i18n="belly">お腹側の色を変える</span></label>
         <div id="bellyOpts" hidden>
-          <div class="row"><label for="bellyColor">お腹の色</label><input id="bellyColor" type="color" value="#d8cf9a" /></div>
+          <div class="row"><label for="bellyColor" data-i18n="belly.color">お腹の色</label><input id="bellyColor" type="color" value="#d8cf9a" /></div>
           <div class="row">
-            <label for="bellyDir">お腹の向き</label>
+            <label for="bellyDir" data-i18n="belly.dir">お腹の向き</label>
             <select id="bellyDir">
-              <option value="0,0,1">前</option>
-              <option value="0,-1,0">下</option>
-              <option value="0,0,-1">後ろ</option>
+              <option value="0,0,1" data-i18n="bdir.front">前</option>
+              <option value="0,-1,0" data-i18n="bdir.down">下</option>
+              <option value="0,0,-1" data-i18n="bdir.back">後ろ</option>
             </select>
           </div>
-          <div class="slider"><label>お腹の色の範囲</label><input id="bellyRange" type="range" min="0" max="1" step="0.01" value="0.4" /></div>
+          <div class="slider"><label data-i18n="belly.range">お腹の色の範囲</label><input id="bellyRange" type="range" min="0" max="1" step="0.01" value="0.4" /></div>
         </div>
       </div>
-      <div class="slider"><label>鱗ごとの明るさの差</label><input id="briVar" type="range" min="0" max="0.5" step="0.01" value="0.12" data-min="0" data-max="1" /></div>
-      <div class="slider"><label>鱗ごとの色味の差</label><input id="hueVar" type="range" min="0" max="1" step="0.01" value="0.3" data-min="0" data-max="2" /></div>
-      <div class="slider"><label>まだら模様</label><input id="fleck" type="range" min="0" max="1.5" step="0.01" value="0" data-min="0" data-max="3" /></div>
-      <div class="slider"><label>溝の暗さ</label><input id="groove" type="range" min="0" max="1" step="0.01" value="0.5" /></div>
-      <div class="slider"><label>凹凸の強さ</label><input id="normalStrength" type="range" min="0" max="3" step="0.05" value="1" data-min="0" data-max="10" /></div>
+      <div class="slider"><label data-i18n="color.briVar">鱗ごとの明るさの差</label><input id="briVar" type="range" min="0" max="0.5" step="0.01" value="0.12" data-min="0" data-max="1" /></div>
+      <div class="slider"><label data-i18n="color.hueVar">鱗ごとの色味の差</label><input id="hueVar" type="range" min="0" max="1" step="0.01" value="0.3" data-min="0" data-max="2" /></div>
+      <div class="slider"><label data-i18n="color.fleck">まだら模様</label><input id="fleck" type="range" min="0" max="1.5" step="0.01" value="0" data-min="0" data-max="3" /></div>
+      <div class="slider"><label data-i18n="color.groove">溝の暗さ</label><input id="groove" type="range" min="0" max="1" step="0.01" value="0.5" /></div>
+      <div class="slider"><label data-i18n="color.normal">凹凸の強さ</label><input id="normalStrength" type="range" min="0" max="3" step="0.05" value="1" data-min="0" data-max="10" /></div>
     </section>
 
     <section>
-      <h2><span>6</span>生成と書き出し</h2>
+      <h2><span>6</span><b data-i18n="s6">生成と書き出し</b></h2>
       <div class="row">
-        <label for="res">解像度</label>
+        <label for="res" data-i18n="res">解像度</label>
         <select id="res"><option>1024</option><option selected>2048</option><option>4096</option></select>
       </div>
       <div class="buttons">
-        <button id="genBtn" class="primary">生成</button>
-        <button id="reseed">別のパターン</button>
+        <button id="genBtn" class="primary" data-i18n="gen">生成</button>
+        <button id="reseed" data-i18n="reseed">別のパターン</button>
       </div>
       <div id="status" class="info"></div>
       <div class="buttons">
-        <button id="exportBtn" disabled>ZIP で書き出し</button>
-        <button id="view2d" class="toggle" disabled>2D で見る</button>
+        <button id="exportBtn" disabled data-i18n="export">ZIP で書き出し</button>
+        <button id="view2d" class="toggle" disabled data-i18n="view2d">2D で見る</button>
       </div>
     </section>
     <footer class="about">
-      <p>読み込んだモデルと画像は、このパソコンの中(ブラウザ)だけで処理されます。どこにも送信・保存されません。</p>
-      <p>推奨: パソコン版の Chrome・Edge・Firefox の最新版</p>
-      <p><a href="https://github.com/leuflatworm/ScaleGen" target="_blank" rel="noopener">使い方・ソースコード(GitHub)</a> · MIT License · <span id="appVersion"></span></p>
+      <p data-i18n="about.privacy">読み込んだモデルと画像は、このパソコンの中(ブラウザ)だけで処理されます。どこにも送信・保存されません。</p>
+      <p data-i18n="about.browsers">推奨: パソコン版の Chrome・Edge・Firefox の最新版</p>
+      <p><a href="https://github.com/leuflatworm/ScaleGen" target="_blank" rel="noopener" data-i18n="about.link">使い方・ソースコード(GitHub)</a> · MIT License · <span id="appVersion"></span></p>
     </footer>
   </aside>
   <main id="view">
@@ -164,7 +173,7 @@
     <div id="progress" hidden>
       <div class="ptop"><span id="progressLabel"></span><span id="progressPct"></span></div>
       <div class="pbar"><div id="progressFill"></div></div>
-      <div class="pbottom"><span id="progressTime"></span><button id="cancelBtn">中止</button></div>
+      <div class="pbottom"><span id="progressTime"></span><button id="cancelBtn" data-i18n="cancel">中止</button></div>
     </div>
   </main>
   <script type="module" src="./src/main.ts"></script>
