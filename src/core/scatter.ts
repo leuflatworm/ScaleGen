@@ -4,7 +4,7 @@
 import { buildHashGrid, cellHash, nextPow2 } from './hashgrid';
 import { tangentDir } from './flow';
 import { relaxOnSurface } from './relax';
-import { hasSizeField, sizeAt, sizeRange, type SizeFieldInput } from './sizefield';
+import { autoSizeLookup, hasSizeField, sizeAt, sizeRange, type SizeFieldInput } from './sizefield';
 
 export interface ScatterInput {
   positions: Float32Array;
@@ -80,10 +80,18 @@ export function scatterScales(inp: ScatterInput, onProgress?: Progress): Scales 
     return [t, u, v];
   };
   const field = hasSizeField(inp.size) ? inp.size : null;
-  // 三角形 t の重心座標 (u, v) での大きさの倍率
+  // 三角形 t の重心座標 (u, v) での大きさの倍率。サイズマップと自動サイズ(その位置で読む)の小さい方
+  const autoAt = field?.auto ? autoSizeLookup(field.auto) : null;
   const sizeOf = (t: number, u: number, v: number) => {
     const q = inp.triUV, w = 1 - u - v;
-    return sizeAt(field!, triMat[t], q[t * 6] * w + q[t * 6 + 2] * u + q[t * 6 + 4] * v, q[t * 6 + 1] * w + q[t * 6 + 3] * u + q[t * 6 + 5] * v);
+    const s = sizeAt(field!, triMat[t], q[t * 6] * w + q[t * 6 + 2] * u + q[t * 6 + 4] * v, q[t * 6 + 1] * w + q[t * 6 + 3] * u + q[t * 6 + 5] * v);
+    if (!autoAt) return s;
+    const a = tris[t * 3], b = tris[t * 3 + 1], c = tris[t * 3 + 2];
+    return Math.min(s, autoAt(
+      P[a * 3] * w + P[b * 3] * u + P[c * 3] * v,
+      P[a * 3 + 1] * w + P[b * 3 + 1] * u + P[c * 3 + 1] * v,
+      P[a * 3 + 2] * w + P[b * 3 + 2] * u + P[c * 3 + 2] * v,
+    ));
   };
 
   let N: number, M: number;
@@ -108,7 +116,7 @@ export function scatterScales(inp: ScatterInput, onProgress?: Progress): Scales 
       ctri[i] = t; cbar[i * 2] = u; cbar[i * 2 + 1] = v;
     }
   } else {
-    // --- サイズマップあり: 密度 1/s² で撒く ---
+    // --- サイズマップ・自動サイズあり: 密度 1/s² で撒く ---
     // 枚数 = ∫ 1/(間隔 × s)² dA。面上の一様な点で 1/s² の平均を見積もる(乱数は配置と別の系列)
     const est = mulberry32(inp.seed * 6151 + 29);
     const K = 20000;

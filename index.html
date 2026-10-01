@@ -90,6 +90,8 @@
       <h2><span>4</span><b data-i18n="s4">大きさ</b></h2>
       <div class="slider"><label data-i18n="size.size">鱗の大きさ</label><input id="size" type="range" min="0.5" max="50" step="0.1" value="6" data-min="0.1" data-max="500" data-unit="mm" /></div>
       <div id="countInfo" class="info"></div>
+      <label class="check"><input id="autoSize" type="checkbox" /> <span data-i18n="size.auto">細い所は自動で小さくする</span></label>
+      <p class="hint" data-i18n="size.autoHint">流れに垂直な断面の一周に鱗が 6 枚並ばない所(指・尻尾など)では、6 枚並ぶ大きさまで小さくします。</p>
       <details id="sizeMapBox">
         <summary data-i18n="sizemap.summary">場所ごとに大きさを変える(サイズマップ)</summary>
         <p class="hint" data-i18n="sizemap.hint">モデルと同じ UV の白黒画像を読み込むと、明るさに応じて鱗が小さくなります。

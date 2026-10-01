@@ -53,6 +53,8 @@ const ja = {
 
   's4': '大きさ',
   'size.size': '鱗の大きさ',
+  'size.auto': '細い所は自動で小さくする',
+  'size.autoHint': '流れに垂直な断面の一周に鱗が 6 枚並ばない所(指・尻尾など)では、6 枚並ぶ大きさまで小さくします。',
   'count.info': '鱗の枚数: 約 {n} 枚(面積 {a} cm²)\nテクスチャ上の鱗 1 枚: 約 {px} px({res}px のとき)',
   'count.tooMany': '⚠ 枚数が多すぎます。鱗を大きくしてください',
   'count.tooSmall': '⚠ テクスチャ上で鱗が小さすぎます。鱗を大きくするか解像度を上げてください',
@@ -189,6 +191,8 @@ const en: Record<Key, string> = {
 
   's4': 'Size',
   'size.size': 'Scale size',
+  'size.auto': 'Auto-shrink on thin parts',
+  'size.autoHint': 'Where fewer than 6 scales fit around the cross-section perpendicular to the flow (fingers, tails, etc.), scales shrink until 6 fit.',
   'count.info': 'Scales: about {n} (area {a} cm²)\nOne scale on the texture: about {px} px (at {res}px)',
   'count.tooMany': '⚠ Too many scales. Increase the scale size',
   'count.tooSmall': '⚠ Scales are too small on the texture. Increase the scale size or the resolution',

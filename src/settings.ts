@@ -8,7 +8,7 @@ const KEY = 'scalegen.settings.v1';
 // 保存する入力欄(id)
 const SLIDERS = ['size', 'overlap', 'sizeVar', 'sizeBlack', 'bellyRange', 'briVar', 'hueVar', 'fleck', 'groove', 'normalStrength'];
 const SELECTS = ['baseDir', 'colorMode', 'res', 'bellyDir'];
-const CHECKS = ['flip', 'separate', 'belly', 'showFlow', 'gapClear', 'maskInvert'];
+const CHECKS = ['flip', 'separate', 'belly', 'showFlow', 'gapClear', 'maskInvert', 'autoSize'];
 const COLORS = ['tint', 'gap', 'bellyColor'];
 
 export interface ImageSetting { name: string; data: string }   // data = 元のファイルの data URL

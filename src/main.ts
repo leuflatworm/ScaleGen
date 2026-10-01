@@ -15,6 +15,7 @@ import { placementStats, verify, verifyScaleColors } from './verify';
 import { loadSourceImage, scaleColorsFromSources, type SourceImage } from './core/colorsource';
 import { applyMask } from './core/maskfilter';
 import { sizeAt, toSizeMapData, type SizeFieldInput, type SizeMapData } from './core/sizefield';
+import { buildAutoSizeField, triangleNeighbors, type AutoSizeSamples } from './core/autosize';
 import { checkSupport } from './support';
 import { attachNumberFields, sliderValue } from './numfield';
 import { applyStatic, getLang, onLangChange, setLang, t, type Lang } from './i18n';
@@ -75,6 +76,9 @@ const state = {
   sizeMaps: new Map<number, SourceImage>(),         // マテリアルごとのサイズマップ
   sizeMapData: new Map<number, SizeMapData>(),      // 同じものを Worker に渡せる形(明るさ 1 チャンネル)にしたもの
   maskRemoved: 0,                                    // マスクで取り除いた鱗の数
+  triNbr: null as Int32Array | null,                // 自動サイズ: 断面をたどるための三角形のつながり(モデルごとに 1 回作る)
+  // 自動サイズ: サンプル点ごとの倍率(流れ・マテリアルの選択・鱗の大きさが変わったら作り直す)。field が null = 小さくする所が無い
+  autoSize: null as { spacing: number; field: AutoSizeSamples | null } | null,
   sourceTex: new Map<number, THREE.Texture>(),
 };
 
@@ -116,6 +120,7 @@ function rebuildSurface(): void {
   state.masks.clear();
   state.sizeMaps.clear();
   state.sizeMapData.clear();
+  state.triNbr = null;
   state.sourceTex.forEach((t) => t.dispose());
   state.sourceTex.clear();
   clearResults();
@@ -265,6 +270,9 @@ function updateFlow(): void {
   const t0 = performance.now();
   state.flow = computeVertexFlow(state.surface, viewer.curves, baseDir());
   state.timings.flowMs = performance.now() - t0;
+  // 断面は流れに垂直に切るので、流れが変わったら自動サイズは測り直す
+  state.autoSize = null;
+  if ($<HTMLInputElement>('autoSize').checked) updateCount();
   viewer.setFlowArrows(state.surface, state.flow, $<HTMLInputElement>('showFlow').checked, state.matMask);
 }
 viewer.onCurvesChanged = updateFlow;
@@ -280,19 +288,48 @@ $('showFlow').addEventListener('change', (e) => viewer.setFlowVisible((e.target 
 // ---------- 4. 大きさ ----------
 function spacing(): number { return num('size') * 0.001; }
 
-// サイズマップ(選んだマテリアルに読み込まれたものだけ)。無ければ null = どこでも倍率 1
+// 自動サイズ(細い所で小さくする)のサンプル点ごとの倍率。オフのとき・小さくする所が無いときは null
+function autoSize(): AutoSizeSamples | null {
+  const s = state.surface;
+  if (!s || !state.flow || !$<HTMLInputElement>('autoSize').checked) return null;
+  const sp = spacing();
+  if (state.autoSize?.spacing === sp) return state.autoSize.field;
+  state.triNbr ??= triangleNeighbors(s.positions.length / 3, s.tris);
+  const field = buildAutoSizeField({
+    positions: s.positions, normals: s.normals, tris: s.tris, triMat: s.triMat,
+    flow: state.flow, matMask: state.matMask, spacing: sp, nbr: state.triNbr,
+  });
+  state.autoSize = { spacing: sp, field };
+  return field;
+}
+
+// 場所ごとの大きさ: サイズマップ(選んだマテリアルに読み込まれたものだけ)と自動サイズ。どちらも無ければ null = どこでも倍率 1
 function sizeField(): SizeFieldInput | null {
   const maps: Record<number, SizeMapData> = {};
   for (const [mi, d] of state.sizeMapData) if (state.matMask[mi]) maps[mi] = d;
-  return Object.keys(maps).length ? { maps, min: num('sizeBlack') } : null;
+  const auto = autoSize();
+  if (!Object.keys(maps).length && !auto) return null;
+  return { maps, min: num('sizeBlack'), auto: auto ? { pos: auto.pos, val: auto.val, radius: auto.radius, min: auto.min } : null };
 }
 
-// 鱗の枚数の見込み = ∫ 1/(間隔 × s)² dA。サイズマップがあれば三角形の角で 1/s² を平均して積む
+// 鱗の枚数の見込み = ∫ 1/(間隔 × s)² dA。
+// 自動サイズがあればそのサンプル点で、サイズマップだけなら三角形の角で 1/s² を平均して積む
 function estimateCount(s: Surface): number {
   const f = sizeField();
   const a = surfaceArea(s, state.matMask);
   if (!f) return Math.round(a / spacing() ** 2);
   const P = s.positions, T = s.tris, q = s.triUV;
+  const auto = autoSize();
+  if (auto) {
+    let accA = 0;
+    for (let i = 0; i < auto.val.length; i++) {
+      const t = auto.tri[i], u = auto.bar[i * 2], v = auto.bar[i * 2 + 1], w = 1 - u - v;
+      const sz = Math.min(auto.val[i], sizeAt(f, s.triMat[t],
+        q[t * 6] * w + q[t * 6 + 2] * u + q[t * 6 + 4] * v, q[t * 6 + 1] * w + q[t * 6 + 3] * u + q[t * 6 + 5] * v));
+      accA += 1 / (sz * sz);
+    }
+    return Math.round((auto.areaPer * accA) / spacing() ** 2);
+  }
   let acc = 0;
   for (let t = 0; t < s.triMat.length; t++) {
     if (!state.matMask[s.triMat[t]]) continue;
@@ -323,6 +360,11 @@ function updateCount(): void {
     (warn.length ? `\n${warn.join('\n')}` : '');
 }
 ['size', 'overlap', 'sizeVar', 'res', 'sizeBlack'].forEach((id) => $(id).addEventListener('input', updateCount));
+// 自動サイズは鱗の配置から変わるので、生成済みなら作り直す
+$('autoSize').addEventListener('change', () => {
+  updateCount();
+  if (state.results.size > 0) generate();
+});
 
 // ---------- 5. 色 ----------
 function hex2rgb(h: string): [number, number, number] {
@@ -856,6 +898,7 @@ if (import.meta.env.DEV) {
     setSource,
     setMask,
     setSizeMap,
+    autoSizeInfo() { return autoSize(); },
     verifyColors() {
       return [...state.results].filter(([mi]) => state.sources.has(mi)).map(([mi, r]) =>
         verifyScaleColors(state.scales!, state.sources.get(mi)!, mi, state.shaded.get(mi)!.color, gen.readAux(r), gen.readPos(r), r.res));
