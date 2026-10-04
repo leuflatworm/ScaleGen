@@ -106,6 +106,9 @@ details summary { cursor: pointer; color: var(--muted); margin: 6px 0; }
 button.small, select.small { font-size: 11px; padding: 3px 7px; flex: none; }
 .headtools { display: flex; align-items: center; gap: 4px; flex: none; }
 #tileSaveNote[hidden] { display: none; }
+#normalFormatRow[hidden], #heightBitsRow[hidden], #smoothRow[hidden] { display: none; }
+.files { white-space: pre-line; line-height: 1.6; word-break: break-all; }
+.files b { color: var(--text); font-weight: 600; }
 .inline { display: flex; align-items: center; gap: 8px; }
 .inline .check { margin: 0; }
 input[type=color]:disabled { opacity: 0.35; }

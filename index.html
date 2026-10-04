@@ -159,6 +159,42 @@
         <button id="reseed" data-i18n="reseed">別のパターン</button>
       </div>
       <div id="status" class="info"></div>
+      <div class="row">
+        <label for="exportPreset" data-i18n="exp.preset">書き出し形式</label>
+        <select id="exportPreset">
+          <option value="standard" data-i18n="exp.p.standard">標準(個別の PNG)</option>
+          <option value="unity" data-i18n="exp.p.unity">Unity(Built-in / URP)</option>
+          <option value="hdrp" data-i18n="exp.p.hdrp">Unity HDRP</option>
+          <option value="unreal" data-i18n="exp.p.unreal">Unreal Engine</option>
+          <option value="godot" data-i18n="exp.p.godot">Godot 4</option>
+          <option value="blender" data-i18n="exp.p.blender">Blender / glTF</option>
+          <option value="vrchat" data-i18n="exp.p.vrchat">VRChat(lilToon など)</option>
+          <option value="custom" data-i18n="exp.p.custom">カスタム</option>
+        </select>
+      </div>
+      <div id="exportFiles" class="hint files"></div>
+      <details id="exportBox">
+        <summary data-i18n="exp.summary">出力するテクスチャを選ぶ</summary>
+        <div id="exportMaps" class="matlist">
+          <label class="check"><input type="checkbox" id="map_baseColor" checked /> <span data-i18n="map.baseColor">ベースカラー(色)</span></label>
+          <label class="check"><input type="checkbox" id="map_normal" checked /> <span data-i18n="map.normal">ノーマル(凹凸)</span></label>
+          <label class="check"><input type="checkbox" id="map_ao" checked /> <span data-i18n="map.ao">AO(溝の陰)</span></label>
+          <label class="check"><input type="checkbox" id="map_height" checked /> <span data-i18n="map.height">高さ</span></label>
+          <label class="check"><input type="checkbox" id="map_roughness" /> <span data-i18n="map.roughness">ラフネス</span></label>
+          <label class="check"><input type="checkbox" id="map_metalSmooth" /> <span data-i18n="map.metalSmooth">メタリック + スムースネス(Unity)</span></label>
+          <label class="check"><input type="checkbox" id="map_maskMap" /> <span data-i18n="map.maskMap">マスクマップ(Unity HDRP)</span></label>
+          <label class="check"><input type="checkbox" id="map_orm" /> <span data-i18n="map.orm">ORM(AO・ラフネス・メタリック)</span></label>
+        </div>
+        <div class="row" id="normalFormatRow">
+          <label for="normalFormat" data-i18n="exp.normalFormat">ノーマルの形式</label>
+          <select id="normalFormat"><option value="gl">OpenGL (Y+)</option><option value="dx">DirectX (Y−)</option></select>
+        </div>
+        <div class="row" id="heightBitsRow">
+          <label for="heightBits" data-i18n="exp.heightBits">高さの階調</label>
+          <select id="heightBits"><option value="16">16 bit</option><option value="8">8 bit</option></select>
+        </div>
+        <div class="slider" id="smoothRow"><label data-i18n="exp.smoothness">つや(スムースネス)</label><input id="smoothness" type="range" min="0" max="1" step="0.01" value="0.4" /></div>
+      </details>
       <div class="buttons">
         <button id="exportBtn" disabled data-i18n="export">ZIP で書き出し</button>
         <button id="view2d" class="toggle" disabled data-i18n="view2d">2D で見る</button>

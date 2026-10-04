@@ -6,9 +6,11 @@ import { setSliderValue, sliderValue } from './numfield';
 const KEY = 'scalegen.settings.v1';
 
 // 保存する入力欄(id)
-const SLIDERS = ['size', 'overlap', 'sizeVar', 'sizeBlack', 'bellyRange', 'briVar', 'hueVar', 'fleck', 'groove', 'normalStrength'];
-const SELECTS = ['baseDir', 'colorMode', 'res', 'bellyDir'];
-const CHECKS = ['flip', 'separate', 'belly', 'showFlow', 'gapClear', 'maskInvert', 'autoSize'];
+const SLIDERS = ['size', 'overlap', 'sizeVar', 'sizeBlack', 'smoothness', 'bellyRange', 'briVar', 'hueVar', 'fleck', 'groove', 'normalStrength'];
+// exportPreset は normalFormat などより先に入れる(プリセットを入れると下の欄が書き換わるため)
+const SELECTS = ['baseDir', 'colorMode', 'res', 'bellyDir', 'exportPreset', 'normalFormat', 'heightBits'];
+const CHECKS = ['flip', 'separate', 'belly', 'showFlow', 'gapClear', 'maskInvert', 'autoSize',
+  'map_baseColor', 'map_normal', 'map_ao', 'map_height', 'map_roughness', 'map_metalSmooth', 'map_maskMap', 'map_orm'];
 const COLORS = ['tint', 'gap', 'bellyColor'];
 
 export interface ImageSetting { name: string; data: string }   // data = 元のファイルの data URL

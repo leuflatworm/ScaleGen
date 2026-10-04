@@ -10,7 +10,8 @@ import type { Progress } from './core/scatter';
 import { TILE_PRESETS, loadTileFile, makePresetTile, tileSize, type TileImage } from './core/tiles';
 import { Generator, type TileParams, type MaterialResult, type ShadeOutput, type ShadeParams } from './gpu/pipeline';
 import { Viewer } from './viewer';
-import { downloadZip, flipRowsRGBA8, png8, png8Exact, pngHeight16 } from './export';
+import { downloadZip, flipRowsRGBA8 } from './export';
+import { EXPORT_PRESETS, MAP_IDS, USES_SMOOTHNESS, buildMapFiles, fileName, matchPreset, type ExportOptions, type MapId } from './exportformats';
 import { placementStats, verify, verifyScaleColors } from './verify';
 import { loadSourceImage, scaleColorsFromSources, type SourceImage } from './core/colorsource';
 import { applyMask } from './core/maskfilter';
@@ -748,23 +749,78 @@ $('cancelBtn').addEventListener('click', () => {
 });
 
 // ---------- 書き出し ----------
+// 画面で選んだ書き出しの内容
+function exportOptions(): ExportOptions {
+  return {
+    maps: MAP_IDS.filter((m) => $<HTMLInputElement>(`map_${m}`).checked),
+    normal: $<HTMLSelectElement>('normalFormat').value === 'dx' ? 'dx' : 'gl',
+    heightBits: $<HTMLSelectElement>('heightBits').value === '8' ? 8 : 16,
+    smoothness: num('smoothness'),
+  };
+}
+// プリセットを選んだら、出力するテクスチャと形式をそのプリセットに合わせる(カスタムは今の選択のまま)
+function applyExportPreset(id: string): void {
+  const p = EXPORT_PRESETS.find((x) => x.id === id);
+  if (p) {
+    for (const m of MAP_IDS) $<HTMLInputElement>(`map_${m}`).checked = p.maps.includes(m);
+    $<HTMLSelectElement>('normalFormat').value = p.normal;
+    $<HTMLSelectElement>('heightBits').value = String(p.heightBits);
+  } else {
+    ($('exportBox') as HTMLDetailsElement).open = true;
+  }
+  renderExportUI();
+}
+// 個別の選択を変えたら、同じ内容のプリセットがあればそれを、無ければ「カスタム」を表示する
+function syncExportPreset(): void {
+  $<HTMLSelectElement>('exportPreset').value = matchPreset(exportOptions());
+  renderExportUI();
+}
+// 使う欄だけ出し、書き出すファイルの一覧(名前とチャンネルの中身)を出す
+function renderExportUI(): void {
+  const o = exportOptions();
+  $('normalFormatRow').hidden = !o.maps.includes('normal');
+  $('heightBitsRow').hidden = !o.maps.includes('height');
+  $('smoothRow').hidden = !o.maps.some((m) => USES_SMOOTHNESS.includes(m));
+  const preset = $<HTMLSelectElement>('exportPreset').value;
+  const alpha = $<HTMLInputElement>('gapClear').checked;
+  const desc = (m: MapId): string => {
+    switch (m) {
+      case 'baseColor': return t(alpha ? 'fd.baseColorAlpha' : 'fd.baseColor');
+      case 'normal': return t(o.normal === 'dx' ? 'fd.normalDx' : 'fd.normalGl');
+      case 'height': return t('fd.height', { bits: o.heightBits });
+      default: return t(`fd.${m}` as Parameters<typeof t>[0]);
+    }
+  };
+  if (o.maps.length === 0) { $('exportFiles').textContent = t('exp.none'); return; }
+  const lines = o.maps.map((m) => `<b>${escapeHtml(fileName(preset, t('exp.base'), m))}</b> — ${escapeHtml(desc(m))}`);
+  if (o.maps.some((m) => m !== 'baseColor')) lines.push(escapeHtml(t('exp.linear')));
+  $('exportFiles').innerHTML = lines.join('\n');
+}
+$('exportPreset').addEventListener('change', () => applyExportPreset($<HTMLSelectElement>('exportPreset').value));
+for (const m of MAP_IDS) $(`map_${m}`).addEventListener('change', syncExportPreset);
+$('normalFormat').addEventListener('change', syncExportPreset);
+$('heightBits').addEventListener('change', syncExportPreset);
+$('gapClear').addEventListener('change', renderExportUI);
+renderExportUI();
+
 async function buildExport(): Promise<Record<string, Uint8Array>> {
   const files: Record<string, Uint8Array> = {};
   if (!state.surface) return files;
+  const o = exportOptions();
+  const preset = $<HTMLSelectElement>('exportPreset').value;
   for (const [mi, r] of state.results) {
-    const o = state.shaded.get(mi)!;
+    const sh = state.shaded.get(mi)!;
     const base = `${safeName(state.modelName)}_${safeName(state.surface.materials[mi])}`;
-    // 隙間を透明にしたときは透明度を正確に残す書き出しにする
-    files[`${base}_BaseColor.png`] = $<HTMLInputElement>('gapClear').checked
-      ? png8Exact(o.color, r.res, r.res)
-      : await png8(o.color, r.res, r.res);
-    files[`${base}_Normal.png`] = await png8(o.normal, r.res, r.res);
-    files[`${base}_AO.png`] = await png8(o.ao, r.res, r.res);
-    files[`${base}_Height.png`] = pngHeight16(gen.readAux(r), r.res, r.res);
+    Object.assign(files, await buildMapFiles(preset, base, o, {
+      res: r.res, color: sh.color, normal: sh.normal, ao: sh.ao,
+      aux: o.maps.includes('height') ? gen.readAux(r) : new Float32Array(0),   // 高さを書き出すときだけ GPU から読む
+      colorHasAlpha: $<HTMLInputElement>('gapClear').checked,   // 隙間を透明にしたときは透明度を正確に残す
+    }));
   }
   return files;
 }
 $('exportBtn').addEventListener('click', async () => {
+  if (exportOptions().maps.length === 0) { setStatus(() => t('exp.none')); return; }
   setStatus(() => t('status.exporting'));
   downloadZip(await buildExport(), `${safeName(state.modelName)}_scales.zip`);
   setStatus(() => t('status.exported'));
@@ -873,6 +929,7 @@ onLangChange(() => {
   renderTileHInfo();
   updateCount();
   updateColorModeUI();
+  renderExportUI();
   $('status').textContent = statusText();
   if (running?.signal.aborted) $('progressLabel').textContent = t('prog.cancelling');
 });
